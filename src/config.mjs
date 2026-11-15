@@ -1,10 +1,11 @@
 import { allowed } from './parser-resolver.mjs';
+import { validateParsers } from './parser-services.mjs';
 
 export function validateConfig(value) {
   // The former QL switch controlled a separate upstream. CMS page matching starts enabled.
   const pageEnabled = value?.pageEnabled ?? (typeof value?.qlEnabled === 'boolean' ? true : undefined);
-  if (!value || !Array.isArray(value.sources) || !value.sources.length || value.sources.length > 8 || typeof pageEnabled !== 'boolean') {
-    throw Object.assign(new Error('请配置 1–8 个采集源，并设置网页解析开关'), { status: 400 });
+  if (!value || !Array.isArray(value.sources) || value.sources.length > 8 || typeof pageEnabled !== 'boolean') {
+    throw Object.assign(new Error('请配置最多 8 个采集源，并设置网页解析开关'), { status: 400 });
   }
   const ids = new Set();
   const sources = value.sources.map(source => {
@@ -14,7 +15,10 @@ export function validateConfig(value) {
     ids.add(source.id);
     return { id: source.id, name: source.name.trim(), url: allowed(source.url).href, enabled: source.enabled };
   });
-  return { sources, pageEnabled };
+  const parsers = validateParsers(value.parsers);
+  const parserMode = value.parserMode ?? 'fallback';
+  if (!['fallback', 'combined'].includes(parserMode)) throw Object.assign(new Error('解析接口调用策略无效'), { status: 400 });
+  return { sources, pageEnabled, parsers, parserMode };
 }
 
 export async function loadConfig(env) {
@@ -22,13 +26,14 @@ export async function loadConfig(env) {
     const row = await env.CONFIG_DB.prepare('SELECT value, revision, updated_at FROM service_config WHERE id = 1').first();
     if (row) return { ...validateConfig(JSON.parse(row.value)), revision: row.revision, updatedAt: row.updated_at, storage: 'D1' };
   }
-  return { sources: JSON.parse(env.CMS_SOURCES || '[]').map(source => ({ ...source, enabled: source.enabled !== false })), pageEnabled: true, revision: 0, updatedAt: null, storage: 'environment' };
+  return { ...validateConfig({ sources: JSON.parse(env.CMS_SOURCES || '[]').map(source => ({ ...source, enabled: source.enabled !== false })), pageEnabled: true, parsers: JSON.parse(env.PARSER_SERVICES || '[]'), parserMode: env.PARSER_MODE || 'fallback' }), revision: 0, updatedAt: null, storage: 'environment' };
 }
 
 export async function saveConfig(env, data) {
   if (!env.CONFIG_DB) throw Object.assign(new Error('配置数据库尚未绑定'), { status: 503 });
   if (!Number.isSafeInteger(data.revision) || data.revision < 0) throw Object.assign(new Error('配置版本无效，请刷新页面'), { status: 400 });
-  const value = JSON.stringify(validateConfig(data));
+  const current = await loadConfig(env);
+  const value = JSON.stringify(validateConfig({ ...current, ...data }));
   const updatedAt = new Date().toISOString();
   const statement = data.revision === 0
     ? env.CONFIG_DB.prepare('INSERT OR IGNORE INTO service_config (id, value, revision, updated_at) VALUES (1, ?, 1, ?)').bind(value, updatedAt)

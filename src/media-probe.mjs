@@ -21,12 +21,12 @@ async function bytes(response, limit, strict = false) {
   return result;
 }
 
-export async function probeCatalogMedia(raw) {
+export async function probeCatalogMedia(raw, type = '') {
   const signal = AbortSignal.timeout(8000);
   const original = allowed(raw).href;
   let url = original;
   let advertised = { width: 0, height: 0 };
-  if (/\.m3u8(?:[?#]|$)/i.test(url)) {
+  if (type === 'm3u8' || /\.m3u8(?:[?#]|$)/i.test(url)) {
     for (let depth = 0; depth < 4; depth++) {
       const response = await upstream(url, {}, true, signal);
       const manifest = new TextDecoder().decode(await bytes(response, 4 * 1024 * 1024, true));
@@ -63,6 +63,7 @@ export async function probeCatalogMedia(raw) {
   const response = await upstream(url, { Range: 'bytes=0-262143' }, true, signal);
   const latencyMs = Math.max(1, Date.now() - started);
   const sample = await bytes(response, 256 * 1024);
+  if (new TextDecoder().decode(sample.subarray(0, 64)).trimStart().startsWith('#EXTM3U')) return probeCatalogMedia(raw, 'm3u8');
   const mp4 = sample.length >= 8 && String.fromCharCode(...sample.subarray(4, 8)) === 'ftyp';
   const webm = sample.length >= 4 && sample[0] === 0x1a && sample[1] === 0x45 && sample[2] === 0xdf && sample[3] === 0xa3;
   if (!mp4 && !webm) throw fail('采集站未返回有效视频文件');

@@ -72,3 +72,16 @@ test('validates source configuration and prevents lost updates', async () => {
     assert.equal((await loadConfig(env)).revision, 1);
   } finally { env.db.close(); }
 });
+
+test('persists parser order and preserves services when a legacy client saves sources', async () => {
+  const env = environment();
+  try {
+    const initial = await loadConfig(env);
+    const parser = id => ({ id, name: id, url: 'https://' + id + '.parser.demo.site/api', enabled: true });
+    const saved = await saveConfig(env, { ...initial, parsers: [parser('second'), parser('first')], parserMode: 'combined' });
+    const next = await saveConfig(env, { sources: saved.sources, pageEnabled: true, revision: saved.revision });
+    assert.deepEqual(next.parsers.map(parser => parser.id), ['second', 'first']);
+    assert.equal(next.parserMode, 'combined');
+    await assert.rejects(saveConfig(env, { ...next, parsers: null }));
+  } finally { env.db.close(); }
+});

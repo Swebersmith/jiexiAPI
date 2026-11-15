@@ -4,6 +4,7 @@ import { loadConfig } from './config.mjs';
 import { identifyPage, episodeNumber } from './page-metadata.mjs';
 import { catalogIdentity, catalogLanguage, catalogQueries, matchingItems, episodeChoices, availableEpisodes } from './catalog-match.mjs';
 import { probeCatalogMedia, sortRoutes } from './media-probe.mjs';
+import { resolveParserServices } from './parser-services.mjs';
 
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
 const json = (data, status = 200) => Response.json(data, { status, headers: {
@@ -126,7 +127,7 @@ async function resolve(data, request, env) {
     if (data.episodeNumber !== undefined) {
       const episode = episodeNumber(String(data.episodeNumber));
       if (!episode) throw error('episodeNumber 参数须为正整数集数或 YYYYMMDD 日期');
-      return resolveCatalog({ title: video.title, year: video.year, language: video.language, episode, source: video.id, isCollection: false }, video.id, data, request, env);
+      return json(await resolveCatalog({ title: video.title, year: video.year, language: video.language, episode, source: video.id, isCollection: false }, video.id, data, request, env));
     }
     const line = video.lines.find(line => line.id === String(data.line ?? '0'));
     const episode = line?.episodes.find(episode => episode.id === String(data.episode ?? '0'));
@@ -136,15 +137,59 @@ async function resolve(data, request, env) {
   const input = data.input ?? data.url ?? data.q;
   if (typeof input !== 'string' || !input.trim() || input.length > 8192) throw error('请输入片名或完整视频 URL');
   const value = input.trim();
+  const parser = data.parser ?? 'auto';
+  if (typeof parser !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(parser)) throw error('解析接口标识无效');
   if (!/^https?:\/\//i.test(value)) {
+    if (!['auto', 'cms'].includes(parser)) throw error('使用解析接口时请输入完整视频网页 URL');
     if (/^[a-z][a-z\d+.-]*:/i.test(value)) throw error('URL 协议无效');
     return json(await search(value, env, data.source, data.page));
   }
   const target = allowed(value);
-  if (/\.(m3u8|mp4|webm|m4v)(?:$)/i.test(target.pathname)) {
+  if (['auto', 'cms'].includes(parser) && /\.(m3u8|mp4|webm|m4v)(?:$)/i.test(target.pathname)) {
     return json({ kind: 'playback', url: target.href, source: target.href, type: /\.m3u8$/i.test(target.pathname) ? 'm3u8' : /\.webm$/i.test(target.pathname) ? 'webm' : 'mp4', direct: true });
   }
   if (env.PAGE_ENABLED === false) throw error('管理后台已停用网页资源解析', 503);
+  const services = JSON.parse(env.PARSER_SERVICES || '[]').filter(service => service.enabled);
+  if (!['auto', 'cms'].includes(parser)) {
+    const selected = services.find(service => service.id === parser);
+    if (!selected) throw error('解析接口不存在或未启用', 404);
+    if (data.episode !== undefined || data.year !== undefined) throw error('指定解析接口时请使用对应分集的网页 URL');
+    const resolved = await resolveParserServices([selected], target.href, request, env, readText);
+    return json(parserPlayback(target.href, undefined, resolved));
+  }
+  let catalog;
+  let failure;
+  try { catalog = await resolvePageCatalog(target, data, request, env); }
+  catch (err) { failure = err; }
+  if (parser === 'cms' || !services.length || data.source || data.episode !== undefined || data.year !== undefined) {
+    if (failure) throw failure;
+    return json(catalog);
+  }
+  if (catalog && env.PARSER_MODE !== 'combined') return json(catalog);
+  const resolved = await resolveParserServices(services, target.href, request, env, readText, env.PARSER_MODE === 'combined');
+  if (!catalog && !resolved.routes.length) {
+    const err = error('采集源与解析接口均未提供可用视频', 502);
+    err.parserResults = resolved.results;
+    throw err;
+  }
+  return json(parserPlayback(target.href, catalog, resolved));
+}
+
+function parserPlayback(source, catalog, resolved) {
+  const routes = sortRoutes([...(catalog?.routes || []), ...resolved.routes]);
+  if (!routes.length) {
+    const err = error('解析接口未提供可播放视频', 502);
+    err.parserResults = resolved.results;
+    throw err;
+  }
+  const selected = routes[0];
+  return { kind: 'playback', source, ...selected, provider: selected.provider || 'cms', metadata: catalog?.metadata || null,
+    routes, selectedRouteId: selected.id, episodes: catalog?.episodes || [],
+    selectedEpisodeNumber: catalog?.selectedEpisodeNumber ?? null, parserResults: resolved.results };
+}
+
+async function resolvePageCatalog(target, data, request, env) {
+  if (!JSON.parse(env.CMS_SOURCES || '[]').length) throw error('当前没有已启用的采集源', 503);
   const metadata = await identifyPage(target.href, readText, env);
   if (data.episode !== undefined) {
     const episode = episodeNumber(String(data.episode));
@@ -195,7 +240,7 @@ async function resolveCatalog(metadata, source, data, request, env) {
   sortRoutes(routes);
   if (!routes.length) throw failure || error('采集站未提供可用资源', 404);
   const episodes = availableEpisodes(details.filter(result => result.status === 'fulfilled').map(result => result.value));
-  return json({ kind: 'playback', provider: 'cms', source, ...routes[0], metadata, routes, episodes, selectedEpisodeNumber: routes[0].match.episodeNumber, selectedRouteId: routes[0].id });
+  return { kind: 'playback', provider: 'cms', source, ...routes[0], metadata, routes, episodes, selectedEpisodeNumber: routes[0].match.episodeNumber, selectedRouteId: routes[0].id };
 }
 
 export default {
@@ -209,10 +254,12 @@ export default {
     const cors = origin && (origins.includes(origin) || origin === url.origin) ? origin : '';
     let response;
     try {
+      if (request.headers.get('X-Crayon-Resolver-Hop') && ['/api/resolve', '/api/player/resolve'].includes(url.pathname)) throw error('检测到解析接口循环调用', 400);
       if (origin && !cors) throw error('请求来源未获授权', 403);
       if (['GET', 'POST'].includes(request.method) && ['/api/resolve', '/api/player/resolve', '/api/player/search', '/api/player/detail'].includes(url.pathname)) {
         const config = await loadConfig(env);
-        env = { ...env, CMS_SOURCES: JSON.stringify(config.sources.filter(source => source.enabled)), PAGE_ENABLED: config.pageEnabled };
+        env = { ...env, CMS_SOURCES: JSON.stringify(config.sources.filter(source => source.enabled)), PAGE_ENABLED: config.pageEnabled,
+          PARSER_SERVICES: JSON.stringify(config.parsers), PARSER_MODE: config.parserMode };
       }
       if (request.method === 'OPTIONS') response = new Response(null, { status: 204 });
       else if (url.pathname === '/health' && request.method === 'GET') response = json({ ok: true, service: 'jiexi-api' });
@@ -234,7 +281,7 @@ export default {
     } catch (err) {
       const status = err.status || 502;
       console.warn(JSON.stringify({ event: 'api_error', path: url.pathname, status }));
-      response = json({ error: { code: err.code || (status === 400 ? 'INVALID_REQUEST' : 'RESOLVE_FAILED'), message: err.message } }, status);
+      response = json({ error: { code: err.code || (status === 400 ? 'INVALID_REQUEST' : 'RESOLVE_FAILED'), message: err.message }, ...(err.parserResults ? { parserResults: err.parserResults } : {}) }, status);
     }
     const headers = new Headers(response.headers);
     headers.set('Vary', 'Origin');

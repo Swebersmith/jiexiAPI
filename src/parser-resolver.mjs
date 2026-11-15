@@ -3,10 +3,10 @@ const enc=new TextEncoder();
 const fail=(message,status=502)=>Object.assign(new Error(message),{status});
 // Only the resolver and its signed playlists can issue relay capabilities.
 // A caller cannot turn this into an arbitrary-URL proxy by changing the URL.
-export function allowed(raw){
+export function allowed(raw,options={}){
  const u=new URL(raw);const host=u.hostname.toLowerCase().replace(/\.$/,'');
  const domain=/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host);
- const internal=/(?:^|\.)(localhost|local|internal|intranet|lan|home|test|invalid|example|onion)$/.test(host)||host==='metadata.google.internal'||host.endsWith('.workers.dev');
+ const internal=/(?:^|\.)(localhost|local|internal|intranet|lan|home|test|invalid|example|onion)$/.test(host)||host==='metadata.google.internal'||host.endsWith('.workers.dev')&&!options.allowWorkers;
  if(u.protocol!=='https:'||u.port||u.username||u.password||!domain||internal)throw fail('媒体地址不符合公网 HTTPS 地址要求',400);
  return u;
 }

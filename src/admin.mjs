@@ -43,7 +43,7 @@ export async function handleAdmin(request, env, readText) {
         else if (url.pathname === '/admin/api/config' && request.method === 'GET') response = reply({ ...await loadConfig(env), publicOrigin: env.PUBLIC_ORIGIN || url.origin });
         else if (url.pathname === '/admin/api/config' && request.method === 'PUT') {
           let data;
-          try { data = JSON.parse(await readText(new Response(request.body), 32768)); } catch { throw fail('配置请求格式无效或过大', 400); }
+          try { data = JSON.parse(await readText(new Response(request.body), 131072)); } catch { throw fail('配置请求格式无效或过大', 400); }
           response = reply(await saveConfig(env, data));
         } else throw fail('管理接口不存在', 404);
       }
