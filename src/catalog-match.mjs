@@ -1,6 +1,7 @@
 import { chineseNumber, episodeNumber } from './page-metadata.mjs';
 
 const fail = (message, code, status = 404) => Object.assign(new Error(message), { status, code });
+const playableMedia = /\.(?:m3u8|mp4|m4v|webm)(?:[?#]|$)/i;
 const versionTag = /(?:国语|普通话|粤语|英语|日语)(?:配音)?(?:版)?|中字|高清版|完整版|未删减版|动画版|tv版/gi;
 const versionSuffix = new RegExp(String.raw`(?:\s*[\[【(]\s*(?:(?:${versionTag.source})\s*)+[\]】)]|\s*(?:${versionTag.source}))\s*$`, 'i');
 const languageNames = { mandarin: '普通话', cantonese: '粤语', japanese: '日语', english: '英语' };
@@ -44,7 +45,8 @@ export function matchingItems(items, metadata) {
     if (exactYear.length) matches = exactYear;
     else if (matches.every(item => item.year)) throw fail('采集站未收录《' + metadata.title + '》的 ' + metadata.year + ' 年版本', 'RESOURCE_NOT_FOUND');
   }
-  const requestedLanguages = titleVersion(metadata.title).languages;
+  const titleLanguages = titleVersion(metadata.title).languages;
+  const requestedLanguages = titleLanguages.length ? titleLanguages : languages(metadata.language || '');
   if (requestedLanguages.length) {
     matches = matches.filter(item => {
       const titleLanguages = titleVersion(item.title).languages;
@@ -59,7 +61,7 @@ export function matchingItems(items, metadata) {
 }
 
 export function episodeChoices(detail, metadata) {
-  const lines = detail.lines.map(line => ({ ...line, episodes: line.episodes.filter(episode => /\.(?:m3u8|mp4|m4v|webm)(?:[?#]|$)/i.test(episode.url)) })).filter(line => line.episodes.length);
+  const lines = detail.lines.map(line => ({ ...line, episodes: line.episodes.filter(episode => playableMedia.test(episode.url)) })).filter(line => line.episodes.length);
   let requested = metadata.episode;
   if (requested === null || requested === undefined) {
     if (lines.some(line => line.episodes.length === 1 && !/剧$|电视剧|动漫|动画|综艺|番剧|连续剧/.test(detail.type || ''))) {
@@ -74,6 +76,15 @@ export function episodeChoices(detail, metadata) {
   }
   if (choices.length) return choices;
   throw fail('采集站暂未提供《' + metadata.title + '》第 ' + requested + ' 集/期的可用视频', 'EPISODE_NOT_FOUND');
+}
+
+export function availableEpisodes(details) {
+  const episodes = new Map();
+  for (const detail of details) for (const line of detail.lines) for (const episode of line.episodes) {
+    const number = episodeNumber(episode.title);
+    if (number && playableMedia.test(episode.url) && !episodes.has(number)) episodes.set(number, { number, title: episode.title });
+  }
+  return [...episodes.values()].sort((a, b) => a.number - b.number);
 }
 
 export function selectEpisode(detail, metadata) { return episodeChoices(detail, metadata)[0]; }

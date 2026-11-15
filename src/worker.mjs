@@ -2,7 +2,7 @@ import { handleParserResolver, allowed, signCatalogMedia } from './parser-resolv
 import { handleAdmin } from './admin.mjs';
 import { loadConfig } from './config.mjs';
 import { identifyPage, episodeNumber } from './page-metadata.mjs';
-import { catalogQueries, matchingItems, episodeChoices } from './catalog-match.mjs';
+import { catalogQueries, matchingItems, episodeChoices, availableEpisodes } from './catalog-match.mjs';
 import { probeCatalogMedia, sortRoutes } from './media-probe.mjs';
 
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
@@ -71,7 +71,8 @@ export function playLines(video) {
       const separator = entry.indexOf('$');
       const url = (separator < 0 ? entry : entry.slice(separator + 1)).trim();
       try { allowed(url); } catch { return []; }
-      return [{ id: String(episode), title: title(separator < 0 ? '第 ' + (episode + 1) + ' 集' : entry.slice(0, separator)), url }];
+      const label = title(separator < 0 ? '第 ' + (episode + 1) + ' 集' : entry.slice(0, separator));
+      return [{ id: String(episode), title: label, number: episodeNumber(label), url }];
     }),
   })).filter(line => line.episodes.length);
 }
@@ -110,6 +111,11 @@ async function resolve(data, request, env) {
   if (!data || typeof data !== 'object') throw error('请求格式错误');
   if (data.id) {
     const video = await detail(data.id, env);
+    if (data.episodeNumber !== undefined) {
+      const episode = episodeNumber(String(data.episodeNumber));
+      if (!episode) throw error('episodeNumber 参数须为正整数集数或 YYYYMMDD 日期');
+      return resolveCatalog({ title: video.title, year: video.year, language: video.language, episode, source: video.id, isCollection: false }, video.id, data, request, env);
+    }
     const line = video.lines.find(line => line.id === String(data.line ?? '0'));
     const episode = line?.episodes.find(episode => episode.id === String(data.episode ?? '0'));
     if (!episode) throw error('播放线路或分集不存在', 404);
@@ -137,6 +143,10 @@ async function resolve(data, request, env) {
     if (!/^(19|20)\d{2}$/.test(String(data.year))) throw error('year 参数须为四位年份');
     metadata.year = String(data.year);
   }
+  return resolveCatalog(metadata, target.href, data, request, env);
+}
+
+async function resolveCatalog(metadata, source, data, request, env) {
   const results = await Promise.allSettled(catalogQueries(metadata.title).map(query => search(query, env, data.source)));
   const completed = results.filter(result => result.status === 'fulfilled');
   if (!completed.length) throw results[0].reason;
@@ -172,7 +182,8 @@ async function resolve(data, request, env) {
   }
   sortRoutes(routes);
   if (!routes.length) throw failure || error('采集站未提供可用资源', 404);
-  return json({ kind: 'playback', provider: 'cms', source: target.href, ...routes[0], metadata, routes, selectedRouteId: routes[0].id });
+  const episodes = availableEpisodes(details.filter(result => result.status === 'fulfilled').map(result => result.value));
+  return json({ kind: 'playback', provider: 'cms', source, ...routes[0], metadata, routes, episodes, selectedEpisodeNumber: routes[0].match.episodeNumber, selectedRouteId: routes[0].id });
 }
 
 export default {

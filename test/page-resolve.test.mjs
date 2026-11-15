@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../src/worker.mjs';
 import { extractMetadata, identifyPage } from '../src/page-metadata.mjs';
-import { catalogQuery, catalogQueries, normalizedTitle, matchingItems, selectEpisode } from '../src/catalog-match.mjs';
+import { availableEpisodes, catalogQuery, catalogQueries, normalizedTitle, matchingItems, selectEpisode } from '../src/catalog-match.mjs';
 import { readText } from '../src/worker.mjs';
 
 test('extracts the current title and episode for indexed Youku, iQiyi, Tencent and Bilibili pages', () => {
@@ -37,6 +37,19 @@ test('matches exact titles and seasons, and selects the exact episode across lin
   assert.throws(() => selectEpisode(detail, { title: '作品', episode: null }), { code: 'EPISODE_UNDETERMINED' });
 });
 
+test('merges numbered episodes across matching catalogs and omits non-media entries', () => {
+  const details = [{ lines: [{ episodes: [
+    { title: '第二集', url: 'https://cdn.demo.site/2.m3u8' },
+    { title: '第1集', url: 'https://cdn.demo.site/1.mp4' },
+    { title: '第3集', url: 'https://cdn.demo.site/watch/3' },
+    { title: '正片', url: 'https://cdn.demo.site/movie.mp4' },
+  ] }] }, { lines: [{ episodes: [
+    { title: '第02集', url: 'https://backup.demo.site/2.m3u8' },
+    { title: '第4集', url: 'https://backup.demo.site/4.m3u8' },
+  ] }] }];
+  assert.deepEqual(availableEpisodes(details), [{ number: 1, title: '第1集' }, { number: 2, title: '第二集' }, { number: 4, title: '第4集' }]);
+});
+
 test('searches version-free titles while retaining language and unrelated title qualifiers', () => {
   for (const title of ['名侦探柯南[普通话版]', '名侦探柯南（国语版）', '名侦探柯南【普通话】', '名侦探柯南国语', '名侦探柯南日语中字']) {
     assert.equal(catalogQuery(title), '名侦探柯南');
@@ -58,6 +71,7 @@ test('searches version-free titles while retaining language and unrelated title 
   assert.deepEqual(matchingItems(items, metadata).map(item => item.id), ['mandarin', 'field']);
   assert.throws(() => matchingItems(items.filter(item => item.id === 'japanese' || item.id === 'unknown'), metadata), { code: 'LANGUAGE_NOT_FOUND' });
   assert.deepEqual(matchingItems(items, { title: '名侦探柯南[日语版]', year: '1996' }).map(item => item.id), ['japanese']);
+  assert.deepEqual(matchingItems(items, { title: '名侦探柯南', language: '日语', year: '1996' }).map(item => item.id), ['japanese']);
 });
 
 test('resolves the Tencent Mandarin title to the exact Mandarin CMS episode', async () => {
@@ -116,6 +130,15 @@ test('resolves a webpage to a CMS episode using only public metadata and configu
     assert.equal(data.provider, 'cms'); assert.equal(data.originalUrl, 'https://cdn.demo.site/22.m3u8');
     assert.equal(new URL(data.url).pathname, '/api/jiexi/resolved-media'); assert.equal(data.direct, false);
     assert.equal(data.match.episodeNumber, 22); assert.equal(data.metadata.title, '谷雨');
+    assert.deepEqual(data.episodes.map(episode => episode.number), [21, 22]);
+    assert.equal(data.selectedEpisodeNumber, 22);
+    const selected = await worker.fetch(new Request('https://api.demo.site/api/resolve', { method: 'POST', body: JSON.stringify({ id: 'test:1', episodeNumber: 21 }) }), { MEDIA_SECRET: 'test-media-secret-long', CMS_SOURCES: JSON.stringify([{ id: 'test', name: '测试源', url: 'https://cms.demo.site/api' }]) });
+    const next = await selected.json();
+    assert.equal(selected.status, 200);
+    assert.equal(next.match.episodeNumber, 21);
+    assert.equal(next.originalUrl, 'https://cdn.demo.site/21.m3u8');
+    assert.equal(next.routes.length, 1);
+    assert.equal(next.selectedEpisodeNumber, 21);
     assert.equal(requests.some(url => url.includes('qlplayer')), false);
   } finally { globalThis.fetch = original; }
 });
