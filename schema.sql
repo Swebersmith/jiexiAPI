@@ -4,3 +4,8 @@ CREATE TABLE IF NOT EXISTS service_config (
   revision INTEGER NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS page_metadata (
+  url TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);

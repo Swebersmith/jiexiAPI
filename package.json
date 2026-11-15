@@ -5,8 +5,16 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/worker.mjs && node --check src/parser-resolver.mjs && node --test",
+    "build": "node scripts/build.mjs",
+    "check": "npm run build && node --test",
+    "predeploy": "npm run build",
     "deploy": "node scripts/deploy.mjs"
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@cloudflare/puppeteer": "2.0.0",
+    "esbuild": "0.28.2"
+  }
 }

@@ -10,11 +10,11 @@ export const html = `<!doctype html>
   <div class="content"><div class="page-heading"><div><p class="eyebrow">SERVICE CONSOLE</p><h1 id="section-title">服务概览</h1><p id="section-description" class="muted">查看请求处理路径与当前部署配置。</p></div><button id="refresh" class="secondary">↻ 刷新配置</button></div>
   <div id="message" class="notice" role="status" hidden></div>
   <section data-page="overview">
-    <div class="summary-grid"><article class="summary"><span class="metric-label">统一接口</span><h2>jiexiAPI<span class="small-dot"></span></h2><p>由你的 Cloudflare Worker 接收请求</p></article><article class="summary"><span class="metric-label">已启用采集源</span><h2 id="source-count">—</h2><p id="source-summary">读取配置中</p></article><article class="summary"><span class="metric-label">网页解析上游</span><h2>QL <span id="ql-status" class="tag">读取中</span></h2><p>视频网站播放页由 QL 执行解析</p></article></div>
-    <article class="panel"><div class="panel-heading"><div><h2>一个入口，三条处理路径</h2><p>播放器 → 你的 jiexiAPI → 对应处理服务</p></div><span class="tag">当前架构</span></div><div class="route-list"><div class="route-row"><span class="route-icon">文</span><div><h3>影片名称</h3><p>搜索采集源，读取播放线路与分集</p></div><span class="route-destination">苹果 CMS 采集 API <span>↗</span></span></div><div class="route-row"><span class="route-icon">▷</span><div><h3>视频媒体直链</h3><p>M3U8 / MP4 / WebM / M4V</p></div><span class="route-destination">Crayon 播放器 <span>↗</span></span></div><div class="route-row"><span class="route-icon">↗</span><div><h3>视频网站播放页</h3><p>腾讯、优酷、爱奇艺、芒果 TV、B 站</p></div><span class="route-destination">QL 解析上游 <span>↗</span></span></div></div></article>
-    <article class="panel configuration"><div><h2>部署信息</h2><p>采集源与 QL 开关保存后用于后续请求。</p></div><dl><div><dt>运行环境</dt><dd>Cloudflare Workers</dd></div><div><dt>配置存储</dt><dd id="storage">—</dd></div><div><dt>配置版本</dt><dd id="revision">—</dd></div><div><dt>最近保存</dt><dd id="updated">—</dd></div><div><dt>媒体公开域名</dt><dd id="public-origin">—</dd></div></dl></article>
+    <div class="summary-grid"><article class="summary"><span class="metric-label">统一接口</span><h2>jiexiAPI<span class="small-dot"></span></h2><p>由你的 Cloudflare Worker 接收请求</p></article><article class="summary"><span class="metric-label">已启用采集源</span><h2 id="source-count">—</h2><p id="source-summary">读取配置中</p></article><article class="summary"><span class="metric-label">网页资源解析</span><h2>采集源 <span id="page-status" class="tag">读取中</span></h2><p>识别片名与集数，匹配采集站资源</p></article></div>
+    <article class="panel"><div class="panel-heading"><div><h2>一个入口，三条处理路径</h2><p>播放器 → 你的 jiexiAPI → 对应处理服务</p></div><span class="tag">当前架构</span></div><div class="route-list"><div class="route-row"><span class="route-icon">文</span><div><h3>影片名称</h3><p>搜索采集源，读取播放线路与分集</p></div><span class="route-destination">苹果 CMS 采集 API <span>↗</span></span></div><div class="route-row"><span class="route-icon">▷</span><div><h3>视频媒体直链</h3><p>M3U8 / MP4 / WebM / M4V</p></div><span class="route-destination">Crayon 播放器 <span>↗</span></span></div><div class="route-row"><span class="route-icon">↗</span><div><h3>视频网站播放页</h3><p>腾讯、优酷、爱奇艺、芒果 TV、B 站</p></div><span class="route-destination">采集站视频资源 <span>↗</span></span></div></div></article>
+    <article class="panel configuration"><div><h2>部署信息</h2><p>采集源与网页解析开关保存后用于后续请求。</p></div><dl><div><dt>运行环境</dt><dd>Cloudflare Workers</dd></div><div><dt>配置存储</dt><dd id="storage">—</dd></div><div><dt>配置版本</dt><dd id="revision">—</dd></div><div><dt>最近保存</dt><dd id="updated">—</dd></div><div><dt>媒体公开域名</dt><dd id="public-origin">—</dd></div></dl></article>
   </section>
-  <section data-page="sources" hidden><form id="config-form"><article class="panel"><div class="panel-heading"><div><h2>苹果 CMS 采集源</h2><p>支持 JSON 采集 API，最多配置 8 个源。</p></div><button id="add-source" class="secondary" type="button">＋ 添加采集源</button></div><div id="source-list"></div></article><article class="panel switch-panel"><div><h2>QL 网页解析</h2><p>启用后，视频网站播放页会请求 svip.qlplayer.cyou。</p></div><label class="toggle-label"><input id="ql-enabled" type="checkbox">启用 QL</label></article><div class="save-bar"><span id="save-hint" class="muted">保存后生效</span><button id="save" type="submit" class="primary">保存配置 ↗</button></div></form></section>
+  <section data-page="sources" hidden><form id="config-form"><article class="panel"><div class="panel-heading"><div><h2>苹果 CMS 采集源</h2><p>支持 JSON 采集 API，最多配置 8 个源。</p></div><button id="add-source" class="secondary" type="button">＋ 添加采集源</button></div><div id="source-list"></div></article><article class="panel switch-panel"><div><h2>网页资源解析</h2><p>启用后，识别五大平台网页信息并匹配已启用采集源。</p></div><label class="toggle-label"><input id="page-enabled" type="checkbox">启用网页解析</label></article><div class="save-bar"><span id="save-hint" class="muted">保存后生效</span><button id="save" type="submit" class="primary">保存配置 ↗</button></div></form></section>
   <section data-page="test" hidden><article class="panel"><div class="panel-heading"><div><h2>测试统一接口</h2><p>输入片名、媒体直链或视频网站播放页，查看真实接口响应。</p></div><code>POST /api/resolve</code></div><form id="test-form"><label for="test-input">测试内容</label><div class="test-controls"><input id="test-input" required maxlength="8192" placeholder="例如 熊出没，或 https://…/video.m3u8"><button id="run-test" type="submit" class="primary">发起请求 ↗</button></div></form><div id="test-result" hidden><div class="test-meta"><span id="test-state"></span><span id="test-time" class="muted"></span></div><pre id="test-output"></pre></div></article></section>
   <footer><span>jiexiAPI <span class="slash">/</span> Crayon Player</span><span>配置管理与在线调试</span></footer>
   </div></main>
@@ -50,11 +50,11 @@ function markDirty() { dirty = true; $('#save-hint').textContent = '有未保存
 function render(data) {
   config = data; dirty = false;
   $('#source-list').replaceChildren(); data.sources.forEach(sourceRow);
-  $('#ql-enabled').checked = data.qlEnabled;
+  $('#page-enabled').checked = data.pageEnabled;
   const count = data.sources.filter(source => source.enabled).length;
   $('#source-count').textContent = String(count);
   $('#source-summary').textContent = '共 ' + data.sources.length + ' 个源 · 苹果 CMS JSON';
-  $('#ql-status').textContent = data.qlEnabled ? '已启用' : '已停用';
+  $('#page-status').textContent = data.pageEnabled ? '已启用' : '已停用';
   $('#storage').textContent = data.storage === 'D1' ? 'D1 数据库' : '部署环境默认值';
   $('#revision').textContent = 'v' + data.revision;
   $('#updated').textContent = data.updatedAt ? new Date(data.updatedAt).toLocaleString('zh-CN') : '尚未在后台保存';
@@ -81,11 +81,11 @@ document.querySelectorAll('[data-section]').forEach(button => button.onclick = (
 $('#refresh').onclick = refresh;
 $('#logout').onclick = async () => { if (dirty && !confirm('退出后未保存的更改将丢失，继续吗？')) return; try { await api('/admin/api/logout', { method: 'POST' }); dirty = false; showLogin(); } catch (err) { notify(err.message, true); } };
 $('#add-source').onclick = () => { if ($('#source-list').children.length >= 8) return notify('最多支持 8 个采集源', true); sourceRow(); markDirty(); };
-$('#ql-enabled').onchange = markDirty;
+$('#page-enabled').onchange = markDirty;
 $('#config-form').addEventListener('submit', async event => {
   event.preventDefault(); $('#save').disabled = true;
   const sources = Array.from($('#source-list').children, row => ({ id: row.querySelector('[data-field=id]').value.trim(), name: row.querySelector('[data-field=name]').value.trim(), url: row.querySelector('[data-field=url]').value.trim(), enabled: row.querySelector('[data-field=enabled]').checked }));
-  try { const saved = await api('/admin/api/config', { method: 'PUT', body: JSON.stringify({ sources, qlEnabled: $('#ql-enabled').checked, revision: config.revision }) }); render(saved); notify('配置已保存，后续请求使用新配置。'); }
+  try { const saved = await api('/admin/api/config', { method: 'PUT', body: JSON.stringify({ sources, pageEnabled: $('#page-enabled').checked, revision: config.revision }) }); render(saved); notify('配置已保存，后续请求使用新配置。'); }
   catch (err) { notify(err.message, true); }
   finally { $('#save').disabled = false; }
 });
@@ -94,7 +94,7 @@ $('#test-form').addEventListener('submit', async event => {
   const started = performance.now();
   try {
     const response = await fetch('/api/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input: $('#test-input').value.trim() }), signal: AbortSignal.timeout(80000) });
-    const data = await response.json(); $('#test-state').textContent = 'HTTP ' + response.status + ' · ' + (response.ok ? data.kind === 'search' ? '片名搜索 / 苹果 CMS' : data.direct ? '媒体直链 / Crayon' : '网页解析 / QL' : '请求失败');
+    const data = await response.json(); $('#test-state').textContent = 'HTTP ' + response.status + ' · ' + (response.ok ? data.kind === 'search' ? '片名搜索 / 苹果 CMS' : data.provider === 'cms' ? '网页解析 / 采集源' : '媒体直链 / Crayon' : '请求失败');
     $('#test-output').textContent = JSON.stringify(data, null, 2);
   } catch (err) { $('#test-state').textContent = '请求失败'; $('#test-output').textContent = err.message; }
   finally { $('#test-time').textContent = ((performance.now() - started) / 1000).toFixed(2) + ' 秒'; $('#run-test').disabled = false; }

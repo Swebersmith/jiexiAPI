@@ -1,6 +1,8 @@
-import { handleParserResolver, allowed } from './parser-resolver.mjs';
+import { handleParserResolver, allowed, signCatalogMedia, probeCatalogMedia } from './parser-resolver.mjs';
 import { handleAdmin } from './admin.mjs';
 import { loadConfig } from './config.mjs';
+import { identifyPage, episodeNumber } from './page-metadata.mjs';
+import { matchingItems, selectEpisode } from './catalog-match.mjs';
 
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
 const json = (data, status = 200) => Response.json(data, { status, headers: {
@@ -121,12 +123,38 @@ async function resolve(data, request, env) {
   }
   const target = allowed(value);
   if (/\.(m3u8|mp4|webm|m4v)(?:$)/i.test(target.pathname)) {
-    return json({ kind: 'playback', url: target.href, source: target.href, type: /\.m3u8$/i.test(target.pathname) ? 'm3u8' : 'mp4', direct: true });
+    return json({ kind: 'playback', url: target.href, source: target.href, type: /\.m3u8$/i.test(target.pathname) ? 'm3u8' : /\.webm$/i.test(target.pathname) ? 'webm' : 'mp4', direct: true });
   }
-  if (env.QL_ENABLED === false) throw error('管理后台已停用 QL 网页解析', 503);
-  const internal = new Request(new URL('/api/player/resolve', env.PUBLIC_ORIGIN || request.url), { method: 'POST',
-    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: value, parser: 'ql' }) });
-  return handleParserResolver(internal, { secret: env.MEDIA_SECRET, authorize: () => true });
+  if (env.PAGE_ENABLED === false) throw error('管理后台已停用网页资源解析', 503);
+  const metadata = await identifyPage(target.href, readText, env);
+  if (data.episode !== undefined) {
+    const episode = episodeNumber(String(data.episode));
+    if (!episode) throw error('episode 参数须为正整数集数或 YYYYMMDD 日期');
+    metadata.episode = episode;
+  }
+  if (data.year !== undefined) {
+    if (!/^(19|20)\d{2}$/.test(String(data.year))) throw error('year 参数须为四位年份');
+    metadata.year = String(data.year);
+  }
+  const results = await search(metadata.title, env, data.source);
+  const candidates = matchingItems(results.items, metadata).slice(0, 8);
+  const details = await Promise.allSettled(candidates.map(candidate => detail(candidate.id, env)));
+  const playable = await Promise.allSettled(details.map(async result => {
+    if (result.status === 'rejected') throw result.reason;
+    const selected = selectEpisode(result.value, metadata);
+    await probeCatalogMedia(selected.episode.url);
+    return { video: result.value, ...selected };
+  }));
+  const selected = playable.find(result => result.status === 'fulfilled');
+  if (!selected) throw playable[0]?.reason || error('采集站未提供可用资源', 404);
+  const { video, line, episode, number } = selected.value;
+  const media = await signCatalogMedia(episode.url, env.PUBLIC_ORIGIN || request.url, env.MEDIA_SECRET);
+  return json({ kind: 'playback', provider: 'cms', source: target.href, ...media,
+    type: /\.m3u8(?:[?#]|$)/i.test(episode.url) ? 'm3u8' : /\.webm(?:[?#]|$)/i.test(episode.url) ? 'webm' : 'mp4',
+    metadata, match: { id: video.id, title: video.title, year: video.year,
+      sourceId: video.sourceId, sourceName: video.sourceName,
+      line: line.id, lineName: line.name, episode: episode.id, episodeTitle: episode.title, episodeNumber: number },
+  });
 }
 
 export default {
@@ -143,7 +171,7 @@ export default {
       if (origin && !cors) throw error('请求来源未获授权', 403);
       if (['GET', 'POST'].includes(request.method) && ['/api/resolve', '/api/player/resolve', '/api/player/search', '/api/player/detail'].includes(url.pathname)) {
         const config = await loadConfig(env);
-        env = { ...env, CMS_SOURCES: JSON.stringify(config.sources.filter(source => source.enabled)), QL_ENABLED: config.qlEnabled };
+        env = { ...env, CMS_SOURCES: JSON.stringify(config.sources.filter(source => source.enabled)), PAGE_ENABLED: config.pageEnabled };
       }
       if (request.method === 'OPTIONS') response = new Response(null, { status: 204 });
       else if (url.pathname === '/health' && request.method === 'GET') response = json({ ok: true, service: 'jiexi-api' });
@@ -165,7 +193,7 @@ export default {
     } catch (err) {
       const status = err.status || 502;
       console.warn(JSON.stringify({ event: 'api_error', path: url.pathname, status }));
-      response = json({ error: { code: status === 400 ? 'INVALID_REQUEST' : 'RESOLVE_FAILED', message: err.message } }, status);
+      response = json({ error: { code: err.code || (status === 400 ? 'INVALID_REQUEST' : 'RESOLVE_FAILED'), message: err.message } }, status);
     }
     const headers = new Headers(response.headers);
     headers.set('Vary', 'Origin');

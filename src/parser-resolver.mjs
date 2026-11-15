@@ -26,7 +26,7 @@ export function normalize(raw){
  return u.href;
 }
 async function bounded(response,max=4*1024*1024){if(!response.ok)throw fail('上游返回 HTTP '+response.status);const reader=response.body.getReader();const chunks=[];let size=0;try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>max)throw fail('上游响应过大');chunks.push(value);}}finally{await reader.cancel();}const out=new Uint8Array(size);let p=0;for(const c of chunks){out.set(c,p);p+=c.length;}return new TextDecoder().decode(out);}
-async function upstream(url,headers={},media=false){for(let hop=0;hop<4;hop++){if(media){allowed(url);headers={...headers};delete headers.Referer;}const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 CrayonPlayer/0.3',...headers},redirect:'manual',signal:AbortSignal.timeout(25000)});if([301,302,303,307,308].includes(r.status)){const location=r.headers.get('location');await r.body?.cancel();if(!location)throw fail('上游重定向缺少地址');url=new URL(location,url).href;if(!media&&new URL(url).origin!==new URL(BASE).origin)throw fail('解析服务跳转到其他域名');continue;}return r;}throw fail('上游重定向过多');}
+async function upstream(url,headers={},media=false,signal=AbortSignal.timeout(25000)){for(let hop=0;hop<4;hop++){if(media){allowed(url);headers={...headers};delete headers.Referer;}const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 CrayonPlayer/0.3',...headers},redirect:'manual',signal});if([301,302,303,307,308].includes(r.status)){const location=r.headers.get('location');await r.body?.cancel();if(!location)throw fail('上游重定向缺少地址');url=new URL(location,url).href;if(!media&&new URL(url).origin!==new URL(BASE).origin)throw fail('解析服务跳转到其他域名');continue;}return r;}throw fail('上游重定向过多');}
 export async function mediaRange(response,range){
  if(!range)return response;
  const match=/^bytes=(\d+)-(\d*)$/.exec(range);if(!match)throw fail('不支持此 Range 请求',400);
@@ -70,6 +70,30 @@ async function validateFirstSegment(text,base,depth=0){
 async function key(env){return crypto.subtle.importKey('raw',enc.encode(env.secret),{name:'HMAC',hash:'SHA-256'},false,['sign','verify']);}
 const hex=b=>Array.from(new Uint8Array(b),v=>v.toString(16).padStart(2,'0')).join('');
 async function relay(url,origin,env,expires){allowed(url);const u=new URL('/api/jiexi/resolved-media',origin);u.searchParams.set('url',url);u.searchParams.set('exp',expires);const sig=await crypto.subtle.sign('HMAC',await key(env),enc.encode(expires+'\n'+url));u.searchParams.set('sig',hex(sig));return u.href;}
+export async function signCatalogMedia(raw, origin, secret) {
+ const original = allowed(raw).href;
+ if (!secret) throw fail('请配置 MEDIA_SECRET',503);
+ const expires = String(Math.floor(Date.now()/1000)+7200);
+ return { url: await relay(original, origin, {secret}, expires), originalUrl: original, expiresAt: Number(expires)*1000, direct: false };
+}
+export async function probeCatalogMedia(raw) {
+ const url = allowed(raw).href;
+ const hls = /\.m3u8(?:[?#]|$)/i.test(url);
+ const response = await upstream(url, hls ? {} : {Range:'bytes=0-1023'}, true, AbortSignal.timeout(8000));
+ if (!response.ok) { await response.body?.cancel(); throw fail('采集站媒体返回 HTTP '+response.status); }
+ if (hls) {
+  const manifest = await bounded(response);
+  if (!manifest.trimStart().startsWith('#EXTM3U')) throw fail('采集站未返回有效的 HLS 播放清单');
+  return;
+ }
+ const reader = response.body.getReader();
+ let first;
+ try { first = (await reader.read()).value || new Uint8Array(); }
+ finally { await reader.cancel(); }
+ const mp4 = first.length >= 8 && String.fromCharCode(...first.subarray(4,8)) === 'ftyp';
+ const webm = first.length >= 4 && first[0] === 0x1a && first[1] === 0x45 && first[2] === 0xdf && first[3] === 0xa3;
+ if (!mp4 && !webm) throw fail('采集站未返回有效的视频文件');
+}
 async function verify(u,env){const exp=u.searchParams.get('exp'),url=u.searchParams.get('url'),sig=u.searchParams.get('sig')||'';if(!/^\d+$/.test(exp||'')||Number(exp)<Date.now()/1000||Number(exp)>Date.now()/1000+7500||!/^[a-f0-9]{64}$/.test(sig))throw fail('播放凭据已过期，请重新解析',403);allowed(url);const bytes=Uint8Array.from(sig.match(/../g),v=>parseInt(v,16));if(!await crypto.subtle.verify('HMAC',await key(env),bytes,enc.encode(exp+'\n'+url)))throw fail('播放凭据无效',403);return {url,exp};}
 export async function rewrite(text,base,origin,env,exp){if(!text.trim().startsWith('#EXTM3U'))throw fail('上游未返回 HLS 播放列表');const lines=[];for(let line of text.split(/\r?\n/)){if(line&&!line.startsWith('#'))line=await relay(new URL(line,base).href,origin,env,exp);else if(line.includes('URI="')){const hits=[...line.matchAll(/URI="([^"]+)"/g)];for(const m of hits)line=line.replace(m[0],'URI="'+await relay(new URL(m[1],base).href,origin,env,exp)+'"');}lines.push(line);}return lines.join('\n');}
 const mediaCors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET, HEAD, OPTIONS','Access-Control-Allow-Headers':'Range, If-Range','Access-Control-Expose-Headers':'Content-Length, Content-Range, Accept-Ranges'};
@@ -111,7 +135,7 @@ export async function handleParserResolver(request,env){const u=new URL(request.
   console.log(JSON.stringify({event:'resolve',ok:true}));
   return json({url:manifestUrl,type:'m3u8',expiresAt:Number(exp)*1000,source});
  }
- if(['GET','HEAD'].includes(request.method)&&/^\/api\/player\/resolved\/[a-f0-9-]+\.m3u8$/.test(u.pathname)){
+ if(['GET','HEAD'].includes(request.method)&&/^\/api\/jiexi\/resolved\/[a-f0-9-]+\.m3u8$/.test(u.pathname)){
   const r=await caches.default.match(new Request(u.origin+u.pathname));if(!r)throw fail('播放列表已失效，请重新解析',410);
   if(request.method==='HEAD')await r.body?.cancel();
   return new Response(request.method==='HEAD'?null:r.body,{headers:{...mediaCors,'Content-Type':'application/vnd.apple.mpegurl','Cache-Control':'no-store'}});

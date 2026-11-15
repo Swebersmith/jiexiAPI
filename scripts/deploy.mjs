@@ -1,4 +1,4 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 
 const account = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -28,9 +28,8 @@ if (!database?.id) throw new Error('请在 deployment.json 中绑定 CONFIG_DB D
 await api(`d1/database/${database.id}/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: await readFile(new URL('../schema.sql', import.meta.url), 'utf8') }) });
 const form = new FormData();
 form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-for (const file of (await readdir(new URL('../src/', import.meta.url))).filter(file => file.endsWith('.mjs'))) {
-  form.append(file, new Blob([await readFile(new URL('../src/' + file, import.meta.url))], { type: 'application/javascript+module' }), file);
-}
+form.append('worker.mjs', new Blob([await readFile(new URL('../dist/worker.mjs', import.meta.url))], { type: 'application/javascript+module' }), 'worker.mjs');
+form.append('worker.mjs.map', new Blob([await readFile(new URL('../dist/worker.mjs.map', import.meta.url))], { type: 'application/source-map' }), 'worker.mjs.map');
 await api(`workers/scripts/${name}`, { method: 'PUT', body: form });
 await api(`workers/scripts/${name}/subdomain`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true }) });
 const subdomain = await api('workers/subdomain');

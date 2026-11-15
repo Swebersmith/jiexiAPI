@@ -2,6 +2,7 @@
   "name": "jiexi-api",
   "main_module": "worker.mjs",
   "compatibility_date": "2026-11-15",
+  "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true,
     "redact_query_string": true,
@@ -9,6 +10,7 @@
     "traces": { "enabled": true, "head_sampling_rate": 0.01 }
   },
   "bindings": [
+    { "type": "browser", "name": "BROWSER" },
     { "type": "d1", "name": "CONFIG_DB", "id": "f0000890-4cd8-4c3b-b293-0a4561c9b86e" },
     { "type": "plain_text", "name": "PUBLIC_ORIGIN", "text": "https://crap.webber.qzz.io" },
     { "type": "plain_text", "name": "CMS_SOURCES", "text": "[{\"id\":\"ruyi\",\"name\":\"如意资源\",\"url\":\"https://bycj.rytvapi.com/api.php/provide/vod\"}]" },

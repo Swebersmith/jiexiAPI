@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import worker from '../src/worker.mjs';
-import { loadConfig, saveConfig } from '../src/config.mjs';
+import { loadConfig, saveConfig, validateConfig } from '../src/config.mjs';
 
 function environment() {
   const db = new DatabaseSync(':memory:');
@@ -42,16 +42,16 @@ test('logs in, updates persistent configuration, rejects stale saves and logs ou
     assert.match(login.headers.get('Set-Cookie'), /HttpOnly; Secure; SameSite=Strict/);
     const config = await (await call(env, '/admin/api/config', { headers: { Cookie: cookie } })).json();
     assert.equal(config.revision, 0);
-    const data = { ...config, qlEnabled: false };
+    const data = { ...config, pageEnabled: false };
     const options = { method: 'PUT', headers: { Cookie: cookie, Origin: 'https://admin.demo.site' }, body: JSON.stringify(data) };
     const saved = await (await call(env, '/admin/api/config', options)).json();
     assert.equal(saved.revision, 1);
-    assert.equal((await loadConfig(env)).qlEnabled, false);
+    assert.equal((await loadConfig(env)).pageEnabled, false);
     assert.equal((await call(env, '/admin/api/config', options)).status, 409);
     assert.equal((await call(env, '/api/resolve?input=' + encodeURIComponent('https://v.qq.com/x/page/test.html'))).status, 503);
-    const next = await saveConfig(env, { ...saved, qlEnabled: true });
+    const next = await saveConfig(env, { ...saved, pageEnabled: true });
     assert.equal(next.revision, 2);
-    assert.equal((await loadConfig(env)).qlEnabled, true);
+    assert.equal((await loadConfig(env)).pageEnabled, true);
     const logout = await call(env, '/admin/api/logout', { method: 'POST', headers: { Cookie: cookie, Origin: 'https://admin.demo.site' } });
     assert.match(logout.headers.get('Set-Cookie'), /Max-Age=0/);
     env.ADMIN_PASSWORD += 'rotated';
@@ -63,6 +63,8 @@ test('validates source configuration and prevents lost updates', async () => {
   const env = environment();
   try {
     const initial = await loadConfig(env);
+    const { pageEnabled, ...legacy } = initial;
+    assert.equal(validateConfig({ ...legacy, qlEnabled: false }).pageEnabled, true);
     await assert.rejects(saveConfig(env, { ...initial, sources: [{ ...initial.sources[0], url: 'https://localhost/api' }] }));
     await assert.rejects(saveConfig(env, { ...initial, sources: [initial.sources[0], initial.sources[0]] }));
     const results = await Promise.allSettled([saveConfig(env, initial), saveConfig(env, initial)]);

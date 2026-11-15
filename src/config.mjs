@@ -1,8 +1,10 @@
 import { allowed } from './parser-resolver.mjs';
 
 export function validateConfig(value) {
-  if (!value || !Array.isArray(value.sources) || !value.sources.length || value.sources.length > 8 || typeof value.qlEnabled !== 'boolean') {
-    throw Object.assign(new Error('请配置 1–8 个采集源，并设置 QL 开关'), { status: 400 });
+  // The former QL switch controlled a separate upstream. CMS page matching starts enabled.
+  const pageEnabled = value?.pageEnabled ?? (typeof value?.qlEnabled === 'boolean' ? true : undefined);
+  if (!value || !Array.isArray(value.sources) || !value.sources.length || value.sources.length > 8 || typeof pageEnabled !== 'boolean') {
+    throw Object.assign(new Error('请配置 1–8 个采集源，并设置网页解析开关'), { status: 400 });
   }
   const ids = new Set();
   const sources = value.sources.map(source => {
@@ -12,7 +14,7 @@ export function validateConfig(value) {
     ids.add(source.id);
     return { id: source.id, name: source.name.trim(), url: allowed(source.url).href, enabled: source.enabled };
   });
-  return { sources, qlEnabled: value.qlEnabled };
+  return { sources, pageEnabled };
 }
 
 export async function loadConfig(env) {
@@ -20,7 +22,7 @@ export async function loadConfig(env) {
     const row = await env.CONFIG_DB.prepare('SELECT value, revision, updated_at FROM service_config WHERE id = 1').first();
     if (row) return { ...validateConfig(JSON.parse(row.value)), revision: row.revision, updatedAt: row.updated_at, storage: 'D1' };
   }
-  return { sources: JSON.parse(env.CMS_SOURCES || '[]').map(source => ({ ...source, enabled: source.enabled !== false })), qlEnabled: true, revision: 0, updatedAt: null, storage: 'environment' };
+  return { sources: JSON.parse(env.CMS_SOURCES || '[]').map(source => ({ ...source, enabled: source.enabled !== false })), pageEnabled: true, revision: 0, updatedAt: null, storage: 'environment' };
 }
 
 export async function saveConfig(env, data) {
