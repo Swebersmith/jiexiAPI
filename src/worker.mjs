@@ -1,8 +1,9 @@
-import { handleParserResolver, allowed, signCatalogMedia, probeCatalogMedia } from './parser-resolver.mjs';
+import { handleParserResolver, allowed, signCatalogMedia } from './parser-resolver.mjs';
 import { handleAdmin } from './admin.mjs';
 import { loadConfig } from './config.mjs';
 import { identifyPage, episodeNumber } from './page-metadata.mjs';
-import { matchingItems, selectEpisode } from './catalog-match.mjs';
+import { matchingItems, episodeChoices } from './catalog-match.mjs';
+import { probeCatalogMedia, sortRoutes } from './media-probe.mjs';
 
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
 const json = (data, status = 200) => Response.json(data, { status, headers: {
@@ -139,22 +140,36 @@ async function resolve(data, request, env) {
   const results = await search(metadata.title, env, data.source);
   const candidates = matchingItems(results.items, metadata).slice(0, 8);
   const details = await Promise.allSettled(candidates.map(candidate => detail(candidate.id, env)));
-  const playable = await Promise.allSettled(details.map(async result => {
-    if (result.status === 'rejected') throw result.reason;
-    const selected = selectEpisode(result.value, metadata);
-    await probeCatalogMedia(selected.episode.url);
-    return { video: result.value, ...selected };
-  }));
-  const selected = playable.find(result => result.status === 'fulfilled');
-  if (!selected) throw playable[0]?.reason || error('采集站未提供可用资源', 404);
-  const { video, line, episode, number } = selected.value;
-  const media = await signCatalogMedia(episode.url, env.PUBLIC_ORIGIN || request.url, env.MEDIA_SECRET);
-  return json({ kind: 'playback', provider: 'cms', source: target.href, ...media,
-    type: /\.m3u8(?:[?#]|$)/i.test(episode.url) ? 'm3u8' : /\.webm(?:[?#]|$)/i.test(episode.url) ? 'webm' : 'mp4',
-    metadata, match: { id: video.id, title: video.title, year: video.year,
-      sourceId: video.sourceId, sourceName: video.sourceName,
-      line: line.id, lineName: line.name, episode: episode.id, episodeTitle: episode.title, episodeNumber: number },
-  });
+  const choices = [];
+  let failure;
+  for (const result of details) {
+    if (result.status === 'rejected') { failure = result.reason; continue; }
+    try { choices.push(...episodeChoices(result.value, metadata).map(selected => ({ video: result.value, ...selected }))); }
+    catch (err) { failure = err; }
+  }
+  const probes = new Map();
+  const routes = [];
+  for (let offset = 0; offset < choices.length; offset += 4) {
+    const batch = await Promise.allSettled(choices.slice(offset, offset + 4).map(async ({ video, line, episode, number }) => {
+      if (!probes.has(episode.url)) probes.set(episode.url, probeCatalogMedia(episode.url));
+      const probe = await probes.get(episode.url);
+      const media = await signCatalogMedia(probe.url, env.PUBLIC_ORIGIN || request.url, env.MEDIA_SECRET);
+      const id = video.id + ':' + line.id + ':' + episode.id;
+      return { id, ...media, quality: probe.quality, latencyMs: probe.latencyMs,
+        name: video.sourceName + ' · ' + line.name + ' · ' + probe.quality.label + ' · ' + probe.latencyMs + 'ms',
+        type: probe.type,
+        match: { id: video.id, title: video.title, year: video.year, sourceId: video.sourceId, sourceName: video.sourceName,
+          line: line.id, lineName: line.name, episode: episode.id, episodeTitle: episode.title, episodeNumber: number },
+      };
+    }));
+    for (const result of batch) {
+      if (result.status === 'fulfilled') routes.push(result.value);
+      else failure = result.reason;
+    }
+  }
+  sortRoutes(routes);
+  if (!routes.length) throw failure || error('采集站未提供可用资源', 404);
+  return json({ kind: 'playback', provider: 'cms', source: target.href, ...routes[0], metadata, routes, selectedRouteId: routes[0].id });
 }
 
 export default {

@@ -23,19 +23,22 @@ export function matchingItems(items, metadata) {
   return matches;
 }
 
-export function selectEpisode(detail, metadata) {
+export function episodeChoices(detail, metadata) {
   const lines = detail.lines.map(line => ({ ...line, episodes: line.episodes.filter(episode => /\.(?:m3u8|mp4|m4v|webm)(?:[?#]|$)/i.test(episode.url)) })).filter(line => line.episodes.length);
   let requested = metadata.episode;
   if (requested === null || requested === undefined) {
     if (lines.some(line => line.episodes.length === 1 && !/剧$|电视剧|动漫|动画|综艺|番剧|连续剧/.test(detail.type || ''))) {
-      const line = lines.find(line => line.episodes.length === 1);
-      return { line, episode: line.episodes[0], number: null };
+      return lines.filter(line => line.episodes.length === 1).map(line => ({ line, episode: line.episodes[0], number: null }));
     } else if (metadata.isCollection) requested = 1;
     else throw fail('网页未提供当前集数，请提供 episode 参数或使用具体分集链接', 'EPISODE_UNDETERMINED', 422);
   }
+  const choices = [];
   for (const line of lines) {
     const episode = line.episodes.find(episode => String(episodeNumber(episode.title)) === String(requested));
-    if (episode) return { line, episode, number: requested };
+    if (episode) choices.push({ line, episode, number: requested });
   }
+  if (choices.length) return choices;
   throw fail('采集站暂未提供《' + metadata.title + '》第 ' + requested + ' 集/期的可用视频', 'EPISODE_NOT_FOUND');
 }
+
+export function selectEpisode(detail, metadata) { return episodeChoices(detail, metadata)[0]; }

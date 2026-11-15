@@ -37,6 +37,10 @@
 
 成功响应含 `kind: "playback"`、`provider: "cms"`、`url`、`originalUrl`、`type`、`direct: false`、`expiresAt`，以及 `metadata` 和 `match`。`match` 包含采集源、影片 ID、年份、线路和分集信息。后端检测媒体可用性并跳过不可访问的采集源，返回有效期 2 小时的签名播放地址。HLS 清单、子清单、密钥与分片经后端转发，Crayon 可直接播放该地址。
 
+响应的 `routes` 包含同一分集在各采集站中的可用线路，按分辨率像素数降序、连接响应延迟升序排列。顶层 `url`、`match`、`quality`、`latencyMs` 与 `routes[0]` 一致，`selectedRouteId` 标识默认线路。每条线路包含可用于播放器菜单的 `id`、`name`、`url`、`type`。
+
+清晰度从 HLS 最高分辨率变体、AVC/HEVC 视频头或 MP4 初始化信息读取，`quality.source` 表明来源。分辨率无法读取时显示“清晰度未知”，排在已识别线路之后。`latencyMs` 为 Cloudflare 后端请求视频分片或文件得到响应的耗时，同等清晰度优先较低延迟。HLS 主清单及其音轨、画质列表继续完整提供。播放器右下角的“线路”菜单展示排序结果，手动切换保留播放位置与播放状态。
+
 可选 `source` 指定采集源。`episode` 可指定正整数集数或 `YYYYMMDD` 日期，`year` 可确认同名影片的年份。合集链接默认选择第 1 集。实际视频 URL 来自已配置采集站，可用范围取决于采集站收录情况。
 
 元信息读取失败返回 `PAGE_METADATA_UNAVAILABLE`，同名不同年份难以区分返回 `AMBIGUOUS_RESOURCE`，未收录返回 `RESOURCE_NOT_FOUND`，集数未识别或未更新分别返回 `EPISODE_UNDETERMINED`、`EPISODE_NOT_FOUND`。网页识别与每个采集站请求均有 12 秒超时，最多尝试 8 条同名候选详情。
