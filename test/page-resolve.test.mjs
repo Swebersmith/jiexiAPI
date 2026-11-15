@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../src/worker.mjs';
 import { extractMetadata, identifyPage } from '../src/page-metadata.mjs';
-import { availableEpisodes, catalogQuery, catalogQueries, normalizedTitle, matchingItems, selectEpisode } from '../src/catalog-match.mjs';
+import { availableEpisodes, catalogIdentity, catalogLanguage, catalogQuery, catalogQueries, normalizedTitle, matchingItems, selectEpisode } from '../src/catalog-match.mjs';
 import { readText } from '../src/worker.mjs';
 
 test('extracts the current title and episode for indexed Youku, iQiyi, Tencent and Bilibili pages', () => {
@@ -68,6 +68,10 @@ test('searches version-free titles while retaining language and unrelated title 
     { id: 'commentary', title: '名侦探柯南[电影解说]', year: '1996', language: '普通话' },
   ];
   const metadata = { title: '名侦探柯南[普通话版]', year: '1996' };
+  assert.equal(catalogIdentity(items[1]), catalogIdentity({ title: '名侦探柯南[普通话版]', year: '1996' }));
+  assert.notEqual(catalogIdentity(items[0]), catalogIdentity(items[1]));
+  assert.equal(catalogLanguage(items[1]), '普通话');
+  assert.equal(catalogIdentity(items[0]), catalogIdentity({ ...items[0], language: '日语,英语,德语' }));
   assert.deepEqual(matchingItems(items, metadata).map(item => item.id), ['mandarin', 'field']);
   assert.throws(() => matchingItems(items.filter(item => item.id === 'japanese' || item.id === 'unknown'), metadata), { code: 'LANGUAGE_NOT_FOUND' });
   assert.deepEqual(matchingItems(items, { title: '名侦探柯南[日语版]', year: '1996' }).map(item => item.id), ['japanese']);

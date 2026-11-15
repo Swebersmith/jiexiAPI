@@ -2,7 +2,7 @@ import { handleParserResolver, allowed, signCatalogMedia } from './parser-resolv
 import { handleAdmin } from './admin.mjs';
 import { loadConfig } from './config.mjs';
 import { identifyPage, episodeNumber } from './page-metadata.mjs';
-import { catalogQueries, matchingItems, episodeChoices, availableEpisodes } from './catalog-match.mjs';
+import { catalogIdentity, catalogLanguage, catalogQueries, matchingItems, episodeChoices, availableEpisodes } from './catalog-match.mjs';
 import { probeCatalogMedia, sortRoutes } from './media-probe.mjs';
 
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
@@ -56,11 +56,23 @@ async function cms(source, params) {
 }
 
 function title(value) { return String(value || '').replace(/<[^>]*>/g, '').slice(0, 1000); }
+function poster(video, source) {
+  for (const value of [video.vod_pic, video.vod_pic_thumb, video.vod_pic_slide]) {
+    if (typeof value !== 'string' || !value.trim() || value.length > 8192) continue;
+    try {
+      const url = new URL(value.trim(), source.url);
+      if (url.protocol === 'http:') url.protocol = 'https:';
+      return allowed(url.href).href;
+    } catch { /* Other catalog image fields may provide a valid public cover. */ }
+  }
+  return '';
+}
 function item(video, source) {
-  return { id: source.id + ':' + video.vod_id, sourceId: source.id, sourceName: source.name,
+  const result = { id: source.id + ':' + video.vod_id, sourceId: source.id, sourceName: source.name,
     title: title(video.vod_name), year: title(video.vod_year), type: title(video.type_name), language: title(video.vod_lang),
-    description: title(video.vod_content), remarks: title(video.vod_remarks),
+    description: title(video.vod_content), remarks: title(video.vod_remarks), poster: poster(video, source),
   };
+  return { ...result, language: catalogLanguage(result), groupKey: catalogIdentity(result) };
 }
 
 export function playLines(video) {

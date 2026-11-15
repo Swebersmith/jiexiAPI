@@ -36,6 +36,20 @@ export function normalizedTitle(raw) {
     .replace(/[\s\p{P}\p{S}]/gu, '');
 }
 
+function catalogLanguages(item) {
+  const titleLanguages = titleVersion(item.title).languages;
+  return titleLanguages.length ? titleLanguages : languages(String(item.language || '').split(/[,，/、;；|]+/)[0]);
+}
+
+export function catalogIdentity(item) {
+  return [normalizedTitle(item.title), item.year || '', catalogLanguages(item).sort().join(',')].join('|');
+}
+
+export function catalogLanguage(item) {
+  const available = catalogLanguages(item);
+  return available.length ? available.map(language => languageNames[language]).join(' / ') : item.language || '';
+}
+
 export function matchingItems(items, metadata) {
   const expected = normalizedTitle(metadata.title);
   let matches = items.filter(item => normalizedTitle(item.title) === expected);
