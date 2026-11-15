@@ -7,6 +7,15 @@
 - 后端 https://jiexi-api.382990094xwb.workers.dev
 - 播放器 https://crap.webber.qzz.io
 - 同源统一接口 https://crap.webber.qzz.io/api/resolve
+- 管理后台 https://crap.webber.qzz.io/admin/
+
+## 管理后台
+
+后台支持查看实际处理路径、添加或移除采集源、启停采集源、启停 QL 网页解析，以及使用真实统一接口测试片名与视频 URL。登录会话有效期 8 小时，管理接口要求登录及同源写入。
+
+管理密码保存在 Worker 的 `ADMIN_PASSWORD` Secret。当前初始密码另存于本地被 Git 忽略的 `.dev.vars` 文件。密码更新后已有登录会话失效。
+
+采集源与 QL 开关保存在 `CONFIG_DB` 绑定的 D1 数据库中。首次保存前使用部署环境中的 `CMS_SOURCES`，保存后优先读取数据库配置。保存操作使用版本校验，同时编辑发生冲突时返回 HTTP 409。
 
 ## API
 
@@ -28,10 +37,10 @@ Node.js 22 及以上，无运行时 npm 依赖。
 
 1. 修改 `deployment.json`。`CMS_SOURCES` 为包含 `id`、`name`、`url` 的 JSON 数组，最多 8 个源。默认沿用播放器项目已有的如意源 `https://bycj.rytvapi.com/api.php/provide/vod`，支持苹果 CMS JSON 格式。
 2. 设置 `PUBLIC_ORIGIN` 为媒体公开 HTTPS 域名，用于生成媒体签名地址。当前使用播放器自定义域名，`/api/jiexi/*` 通过 Service Binding 转发到本后端。独立部署时可将其设为后端域名。`ALLOWED_ORIGINS` 为逗号分隔的浏览器来源列表。
-3. 在本机环境中设置 `CLOUDFLARE_ACCOUNT_ID` 和拥有 Workers Scripts 编辑权限的 `CLOUDFLARE_API_TOKEN`。
-4. 执行 `npm run check`，再执行 `npm run deploy`。部署脚本调用 Cloudflare 官方 REST API，首次部署生成 `MEDIA_SECRET`，后续部署保留已有 secret。
+3. 在 Cloudflare 创建 D1 数据库，并将数据库 ID 写入 `deployment.json` 中的 `CONFIG_DB` 绑定。当前数据库名为 `jiexi-api-config`。在本机环境中设置 `CLOUDFLARE_ACCOUNT_ID` 和拥有 Workers Scripts 编辑、D1 编辑权限的 `CLOUDFLARE_API_TOKEN`。
+4. 首次启用后台时，在本机环境变量 `ADMIN_PASSWORD` 中设置至少 20 字符的随机密码。执行 `npm run check`，再执行 `npm run deploy`。部署脚本初始化 D1 表、首次生成 `MEDIA_SECRET`，后续部署保留已有 secret 与数据库配置。
 
-播放器通过 `RESOLVER` Service Binding 连接 `jiexi-api`，同源转发 `/api/resolve`、`/api/player/resolve`、`/api/player/search`、`/api/player/detail` 和 `/api/jiexi/*`。QL 媒体签名地址使用 `/api/jiexi/resolved/*` 和 `/api/jiexi/resolved-media`。
+播放器通过 `RESOLVER` Service Binding 连接 `jiexi-api`，同源转发 `/admin`、`/admin/*`、`/api/resolve`、`/api/player/resolve`、`/api/player/search`、`/api/player/detail` 和 `/api/jiexi/*`。QL 媒体签名地址使用 `/api/jiexi/resolved/*` 和 `/api/jiexi/resolved-media`。
 
 采集请求超时 12 秒，JSON 响应限制 4 MiB，请求体限制 16 KiB。URL 校验限制为公网域名 HTTPS 地址。直链由播放器已有的媒体准备与转发功能处理。
 

@@ -1,4 +1,6 @@
 import { handleParserResolver, allowed } from './parser-resolver.mjs';
+import { handleAdmin } from './admin.mjs';
+import { loadConfig } from './config.mjs';
 
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
 const json = (data, status = 200) => Response.json(data, { status, headers: {
@@ -26,7 +28,8 @@ export async function readText(response, limit = 4 * 1024 * 1024) {
 function sources(env) {
   let list;
   try { list = JSON.parse(env.CMS_SOURCES || '[]'); } catch { throw error('CMS_SOURCES 配置格式错误', 503); }
-  if (!Array.isArray(list) || !list.length || list.length > 8) throw error('请配置 1–8 个苹果 CMS JSON 采集源', 503);
+  if (!Array.isArray(list) || list.length > 8) throw error('请配置 1–8 个苹果 CMS JSON 采集源', 503);
+  if (!list.length) throw error('当前没有已启用的采集源，请在管理后台启用', 503);
   const ids = new Set();
   for (const source of list) {
     if (!/^[a-z0-9_-]{1,32}$/.test(source.id) || ids.has(source.id) || !source.name) throw error('采集源标识配置错误', 503);
@@ -120,6 +123,7 @@ async function resolve(data, request, env) {
   if (/\.(m3u8|mp4|webm|m4v)(?:$)/i.test(target.pathname)) {
     return json({ kind: 'playback', url: target.href, source: target.href, type: /\.m3u8$/i.test(target.pathname) ? 'm3u8' : 'mp4', direct: true });
   }
+  if (env.QL_ENABLED === false) throw error('管理后台已停用 QL 网页解析', 503);
   const internal = new Request(new URL('/api/player/resolve', env.PUBLIC_ORIGIN || request.url), { method: 'POST',
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: value, parser: 'ql' }) });
   return handleParserResolver(internal, { secret: env.MEDIA_SECRET, authorize: () => true });
@@ -128,12 +132,19 @@ async function resolve(data, request, env) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/' && request.method === 'GET') return Response.redirect(url.origin + '/admin/', 302);
+    const admin = await handleAdmin(request, env, readText);
+    if (admin) return admin;
     const origin = request.headers.get('Origin');
     const origins = (env.ALLOWED_ORIGINS || '').split(',').map(value => value.trim());
     const cors = origin && (origins.includes(origin) || origin === url.origin) ? origin : '';
     let response;
     try {
       if (origin && !cors) throw error('请求来源未获授权', 403);
+      if (['GET', 'POST'].includes(request.method) && ['/api/resolve', '/api/player/resolve', '/api/player/search', '/api/player/detail'].includes(url.pathname)) {
+        const config = await loadConfig(env);
+        env = { ...env, CMS_SOURCES: JSON.stringify(config.sources.filter(source => source.enabled)), QL_ENABLED: config.qlEnabled };
+      }
       if (request.method === 'OPTIONS') response = new Response(null, { status: 204 });
       else if (url.pathname === '/health' && request.method === 'GET') response = json({ ok: true, service: 'jiexi-api' });
       else if (url.pathname === '/api/jiexi/resolved-media' || url.pathname.startsWith('/api/jiexi/resolved/')) {

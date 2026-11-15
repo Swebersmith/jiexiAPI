@@ -9,6 +9,7 @@
     "traces": { "enabled": true, "head_sampling_rate": 0.01 }
   },
   "bindings": [
+    { "type": "d1", "name": "CONFIG_DB", "id": "f0000890-4cd8-4c3b-b293-0a4561c9b86e" },
     { "type": "plain_text", "name": "PUBLIC_ORIGIN", "text": "https://crap.webber.qzz.io" },
     { "type": "plain_text", "name": "CMS_SOURCES", "text": "[{\"id\":\"ruyi\",\"name\":\"如意资源\",\"url\":\"https://bycj.rytvapi.com/api.php/provide/vod\"}]" },
     { "type": "plain_text", "name": "ALLOWED_ORIGINS", "text": "https://crayon-player.382990094xwb.workers.dev,https://crap.webber.qzz.io" }
