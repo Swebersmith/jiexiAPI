@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../src/worker.mjs';
 import { extractMetadata, identifyPage } from '../src/page-metadata.mjs';
-import { normalizedTitle, matchingItems, selectEpisode } from '../src/catalog-match.mjs';
+import { catalogQuery, catalogQueries, normalizedTitle, matchingItems, selectEpisode } from '../src/catalog-match.mjs';
 import { readText } from '../src/worker.mjs';
 
 test('extracts the current title and episode for indexed Youku, iQiyi, Tencent and Bilibili pages', () => {
@@ -35,6 +35,67 @@ test('matches exact titles and seasons, and selects the exact episode across lin
   assert.equal(selectEpisode(detail, { title: '作品', episode: 2 }).episode.url, 'https://cdn.demo.site/2.m3u8');
   assert.throws(() => selectEpisode(detail, { title: '作品', episode: 3 }), { code: 'EPISODE_NOT_FOUND' });
   assert.throws(() => selectEpisode(detail, { title: '作品', episode: null }), { code: 'EPISODE_UNDETERMINED' });
+});
+
+test('searches version-free titles while retaining language and unrelated title qualifiers', () => {
+  for (const title of ['名侦探柯南[普通话版]', '名侦探柯南（国语版）', '名侦探柯南【普通话】', '名侦探柯南国语', '名侦探柯南日语中字']) {
+    assert.equal(catalogQuery(title), '名侦探柯南');
+    assert.equal(normalizedTitle(title), normalizedTitle('名侦探柯南'));
+  }
+  assert.equal(normalizedTitle('作品国语（2026）'), normalizedTitle('作品'));
+  assert.deepEqual(catalogQueries('名侦探柯南[普通话版]'), ['名侦探柯南', '名侦探柯南国语', '名侦探柯南普通话']);
+  for (const title of ['名侦探柯南[电影解说]', '名侦探柯南剧场版', '名侦探柯南 OVA', '名侦探柯南 第2季']) {
+    assert.notEqual(normalizedTitle(title), normalizedTitle('名侦探柯南'));
+  }
+  const items = [
+    { id: 'japanese', title: '名侦探柯南', year: '1996', language: '日语' },
+    { id: 'mandarin', title: '名侦探柯南国语', year: '1996', language: '日语' },
+    { id: 'field', title: '名侦探柯南', year: '1996', language: '汉语普通话' },
+    { id: 'unknown', title: '名侦探柯南', year: '1996' },
+    { id: 'commentary', title: '名侦探柯南[电影解说]', year: '1996', language: '普通话' },
+  ];
+  const metadata = { title: '名侦探柯南[普通话版]', year: '1996' };
+  assert.deepEqual(matchingItems(items, metadata).map(item => item.id), ['mandarin', 'field']);
+  assert.throws(() => matchingItems(items.filter(item => item.id === 'japanese' || item.id === 'unknown'), metadata), { code: 'LANGUAGE_NOT_FOUND' });
+  assert.deepEqual(matchingItems(items, { title: '名侦探柯南[日语版]', year: '1996' }).map(item => item.id), ['japanese']);
+});
+
+test('resolves the Tencent Mandarin title to the exact Mandarin CMS episode', async () => {
+  const original = globalThis.fetch;
+  const queries = new Set();
+  const videos = [
+    { vod_id: 562, vod_name: '名侦探柯南', vod_lang: '日语' },
+    { vod_id: 563, vod_name: '名侦探柯南国语', vod_lang: '日语' },
+  ].map(video => ({ ...video, vod_year: '1996', type_name: '日韩动漫', vod_play_from: 'hls', vod_play_url: '第1279集$https://cdn.demo.site/' + video.vod_id + '/1279.m3u8#第1280集$https://cdn.demo.site/' + video.vod_id + '/1280.m3u8' }));
+  globalThis.fetch = async input => {
+    const url = new URL(input);
+    if (url.hostname === 'm.v.qq.com') return new Response('<meta property="og:title" content="【腾讯视频】 名侦探柯南[普通话版] 1280"><script>{"coverInfo":{"title":"名侦探柯南[普通话版]","year":"1996"},"videoInfo":{"c_title_detail":"第1280集"}}</script>');
+    if (url.hostname === 'cdn.demo.site') {
+      assert.ok(['/563/1280.m3u8', '/563/0.ts'].includes(url.pathname));
+      return new Response('#EXTM3U\n#EXTINF:6,\n0.ts\n#EXT-X-ENDLIST');
+    }
+    assert.equal(url.hostname, 'cms.demo.site');
+    if (url.searchParams.has('wd')) {
+      const query = url.searchParams.get('wd');
+      queries.add(query);
+      if (query === '名侦探柯南普通话') return new Response('Unavailable', { status: 503 });
+      return Response.json({ code: 1, list: query === '名侦探柯南' ? [videos[0]] : videos });
+    }
+    assert.equal(url.searchParams.get('ids'), '563');
+    return Response.json({ code: 1, list: [videos[1]] });
+  };
+  try {
+    const env = { MEDIA_SECRET: 'test-media-signing-secret', CMS_SOURCES: JSON.stringify([{ id: 'test', name: '测试源', url: 'https://cms.demo.site/api' }]) };
+    const response = await worker.fetch(new Request('https://api.demo.site/api/resolve?url=' + encodeURIComponent('https://v.qq.com/x/cover/hzgtnf6tbvfekfv/f41021om6x5.html')), env);
+    const result = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(result.match.title, '名侦探柯南国语');
+    assert.equal(result.match.episodeNumber, 1280);
+    assert.equal(result.routes.length, 1);
+    assert.deepEqual([...queries].sort(), ['名侦探柯南', '名侦探柯南国语', '名侦探柯南普通话'].sort());
+    assert.equal(result.originalUrl, 'https://cdn.demo.site/563/1280.m3u8');
+    assert.equal(result.metadata.title, '名侦探柯南[普通话版]');
+  } finally { globalThis.fetch = original; }
 });
 
 test('resolves a webpage to a CMS episode using only public metadata and configured sources', async () => {

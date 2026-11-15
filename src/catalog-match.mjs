@@ -1,11 +1,37 @@
 import { chineseNumber, episodeNumber } from './page-metadata.mjs';
 
 const fail = (message, code, status = 404) => Object.assign(new Error(message), { status, code });
+const versionTag = /(?:国语|普通话|粤语|英语|日语)(?:配音)?(?:版)?|中字|高清版|完整版|未删减版|动画版|tv版/gi;
+const versionSuffix = new RegExp(String.raw`(?:\s*[\[【(]\s*(?:(?:${versionTag.source})\s*)+[\]】)]|\s*(?:${versionTag.source}))\s*$`, 'i');
+const languageNames = { mandarin: '普通话', cantonese: '粤语', japanese: '日语', english: '英语' };
+const languagePatterns = { mandarin: /国语|普通话|汉语/, cantonese: /粤语/, japanese: /日语/, english: /英语/ };
+const languageQueries = { mandarin: ['国语', '普通话'], cantonese: ['粤语'], japanese: ['日语'], english: ['英语'] };
+
+function languages(value) {
+  return Object.keys(languageNames).filter(language => languagePatterns[language].test(value));
+}
+
+function titleVersion(raw) {
+  let title = String(raw || '').normalize('NFKC').replace(/\((?:19|20)\d{2}\)/g, '').trim();
+  const tags = [];
+  let suffix;
+  while ((suffix = versionSuffix.exec(title))) {
+    tags.unshift(...(suffix[0].match(versionTag) || []));
+    title = title.slice(0, suffix.index).trim();
+  }
+  return { title, languages: languages(tags.join(' ')) };
+}
+
+export function catalogQuery(raw) { return titleVersion(raw).title; }
+
+export function catalogQueries(raw) {
+  const version = titleVersion(raw);
+  return [version.title, ...version.languages.flatMap(language => languageQueries[language].map(label => version.title + label))];
+}
+
 export function normalizedTitle(raw) {
-  return String(raw || '').normalize('NFKC').toLowerCase()
+  return catalogQuery(raw).toLowerCase()
     .replace(/第\s*([\d零〇一二两三四五六七八九十百千]+)\s*[季部]/g, (_, value) => { const number = chineseNumber(value); return number === 1 ? '' : String(number); })
-    .replace(/[（(](?:19|20)\d{2}[)）]/g, '')
-    .replace(/(?:国语|粤语|普通话|英语|日语|中字|高清版|完整版|未删减版|动画版|tv版)$/gi, '')
     .replace(/[\s\p{P}\p{S}]/gu, '');
 }
 
@@ -17,6 +43,15 @@ export function matchingItems(items, metadata) {
     const exactYear = matches.filter(item => item.year === metadata.year);
     if (exactYear.length) matches = exactYear;
     else if (matches.every(item => item.year)) throw fail('采集站未收录《' + metadata.title + '》的 ' + metadata.year + ' 年版本', 'RESOURCE_NOT_FOUND');
+  }
+  const requestedLanguages = titleVersion(metadata.title).languages;
+  if (requestedLanguages.length) {
+    matches = matches.filter(item => {
+      const titleLanguages = titleVersion(item.title).languages;
+      const available = titleLanguages.length ? titleLanguages : languages(item.language || '');
+      return requestedLanguages.every(language => available.includes(language));
+    });
+    if (!matches.length) throw fail('采集站暂未提供《' + catalogQuery(metadata.title) + '》的' + requestedLanguages.map(language => languageNames[language]).join('/') + '版本', 'LANGUAGE_NOT_FOUND');
   }
   const years = new Set(matches.map(item => item.year).filter(Boolean));
   if (years.size > 1) throw fail('采集站存在多个年份的同名影片，请提供 year 参数确认版本', 'AMBIGUOUS_RESOURCE', 409);

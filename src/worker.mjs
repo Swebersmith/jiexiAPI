@@ -2,7 +2,7 @@ import { handleParserResolver, allowed, signCatalogMedia } from './parser-resolv
 import { handleAdmin } from './admin.mjs';
 import { loadConfig } from './config.mjs';
 import { identifyPage, episodeNumber } from './page-metadata.mjs';
-import { matchingItems, episodeChoices } from './catalog-match.mjs';
+import { catalogQueries, matchingItems, episodeChoices } from './catalog-match.mjs';
 import { probeCatalogMedia, sortRoutes } from './media-probe.mjs';
 
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
@@ -58,7 +58,7 @@ async function cms(source, params) {
 function title(value) { return String(value || '').replace(/<[^>]*>/g, '').slice(0, 1000); }
 function item(video, source) {
   return { id: source.id + ':' + video.vod_id, sourceId: source.id, sourceName: source.name,
-    title: title(video.vod_name), year: title(video.vod_year), type: title(video.type_name),
+    title: title(video.vod_name), year: title(video.vod_year), type: title(video.type_name), language: title(video.vod_lang),
     description: title(video.vod_content), remarks: title(video.vod_remarks),
   };
 }
@@ -137,8 +137,11 @@ async function resolve(data, request, env) {
     if (!/^(19|20)\d{2}$/.test(String(data.year))) throw error('year 参数须为四位年份');
     metadata.year = String(data.year);
   }
-  const results = await search(metadata.title, env, data.source);
-  const candidates = matchingItems(results.items, metadata).slice(0, 8);
+  const results = await Promise.allSettled(catalogQueries(metadata.title).map(query => search(query, env, data.source)));
+  const completed = results.filter(result => result.status === 'fulfilled');
+  if (!completed.length) throw results[0].reason;
+  const items = new Map(completed.flatMap(result => result.value.items).map(item => [item.id, item]));
+  const candidates = matchingItems([...items.values()], metadata).slice(0, 8);
   const details = await Promise.allSettled(candidates.map(candidate => detail(candidate.id, env)));
   const choices = [];
   let failure;
