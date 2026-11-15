@@ -1,0 +1,12 @@
+{
+  "name": "jiexi-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/worker.mjs && node --check src/parser-resolver.mjs && node --test",
+    "deploy": "node scripts/deploy.mjs"
+  },
+  "engines": { "node": ">=22" }
+}
