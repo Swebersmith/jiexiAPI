@@ -47,7 +47,8 @@ test('merges numbered episodes across matching catalogs and omits non-media entr
     { title: '第02集', url: 'https://backup.demo.site/2.m3u8' },
     { title: '第4集', url: 'https://backup.demo.site/4.m3u8' },
   ] }] }];
-  assert.deepEqual(availableEpisodes(details), [{ number: 1, title: '第1集' }, { number: 2, title: '第二集' }, { number: 4, title: '第4集' }]);
+  assert.deepEqual(availableEpisodes(details).map(({ title }) => title), ['第1集', '第二集', '第4集', '正片']);
+  assert.equal(new Set(availableEpisodes(details).map(episode => episode.key)).size, 4);
 });
 
 test('searches version-free titles while retaining language and unrelated title qualifiers', () => {

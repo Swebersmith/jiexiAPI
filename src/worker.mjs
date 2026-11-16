@@ -5,6 +5,7 @@ import { identifyPage, episodeNumber } from './page-metadata.mjs';
 import { catalogIdentity, catalogLanguage, catalogQueries, matchingItems, episodeChoices, availableEpisodes } from './catalog-match.mjs';
 import { probeCatalogMedia, sortRoutes } from './media-probe.mjs';
 import { resolveParserServices, qlParser } from './parser-services.mjs';
+import { episodeIdentity, episodeReference, lineEpisodeIdentities } from './episode-identity.mjs';
 
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
 const json = (data, status = 200) => Response.json(data, { status, headers: {
@@ -122,12 +123,34 @@ async function search(input, env, sourceId, page = '1') {
 
 async function resolve(data, request, env) {
   if (!data || typeof data !== 'object') throw error('请求格式错误');
+  if (data.episodeRef !== undefined) {
+    const ref = data.episodeRef;
+    if (!ref || typeof ref !== 'object' || Array.isArray(ref) ||
+      !['id', 'line', 'episode', 'title'].every(field => typeof ref[field] === 'string' && ref[field].length > 0 && ref[field].length <= 1024) ||
+      ref.lineName !== undefined && (typeof ref.lineName !== 'string' || ref.lineName.length > 1024)) throw error('分集引用格式无效');
+    const video = await detail(ref.id, env);
+    let line = video.lines.find(line => line.id === ref.line && (!ref.lineName || line.name === ref.lineName));
+    if (!line && ref.lineName) {
+      const lines = video.lines.filter(line => line.name === ref.lineName);
+      if (lines.length === 1) line = lines[0];
+    }
+    let selected = line?.episodes.find(episode => episode.id === ref.episode && episode.title === ref.title);
+    if (!selected && line) {
+      const exact = line.episodes.filter(episode => episode.title === ref.title);
+      if (exact.length === 1) selected = exact[0];
+    }
+    if (!selected) throw error('采集站的选集列表已更新，请刷新列表后重选', 409);
+    const identity = lineEpisodeIdentities(line).find(entry => entry.episode === selected).identity;
+    return json(await resolveCatalog({ title: video.title, year: video.year, language: video.language,
+      episode: identity.number ?? null, episodeKey: identity.key, episodeTitle: selected.title,
+      episodeRef: episodeReference(video, line, selected), source: video.id, isCollection: false }, video.id, data, request, env, video));
+  }
   if (data.id) {
     const video = await detail(data.id, env);
     if (data.episodeNumber !== undefined) {
       const episode = episodeNumber(String(data.episodeNumber));
       if (!episode) throw error('episodeNumber 参数须为正整数集数或 YYYYMMDD 日期');
-      return json(await resolveCatalog({ title: video.title, year: video.year, language: video.language, episode, source: video.id, isCollection: false }, video.id, data, request, env));
+      return json(await resolveCatalog({ title: video.title, year: video.year, language: video.language, episode, source: video.id, isCollection: false }, video.id, data, request, env, video));
     }
     const line = video.lines.find(line => line.id === String(data.line ?? '0'));
     const episode = line?.episodes.find(episode => episode.id === String(data.episode ?? '0'));
@@ -186,7 +209,7 @@ function parserPlayback(source, catalog, resolved) {
   const selected = routes[0];
   return { kind: 'playback', source, ...selected, provider: selected.provider || 'cms', metadata: catalog?.metadata || null,
     routes, selectedRouteId: selected.id, episodes: catalog?.episodes || [],
-    selectedEpisodeNumber: catalog?.selectedEpisodeNumber ?? null, parserResults: resolved.results };
+    selectedEpisodeNumber: catalog?.selectedEpisodeNumber ?? null, selectedEpisodeKey: catalog?.selectedEpisodeKey ?? null, parserResults: resolved.results };
 }
 
 async function resolvePageCatalog(target, data, request, env) {
@@ -204,13 +227,13 @@ async function resolvePageCatalog(target, data, request, env) {
   return resolveCatalog(metadata, target.href, data, request, env);
 }
 
-async function resolveCatalog(metadata, source, data, request, env) {
+async function resolveCatalog(metadata, source, data, request, env, anchor) {
   const results = await Promise.allSettled(catalogQueries(metadata.title).map(query => search(query, env, data.source)));
   const completed = results.filter(result => result.status === 'fulfilled');
-  if (!completed.length) throw results[0].reason;
-  const items = new Map(completed.flatMap(result => result.value.items).map(item => [item.id, item]));
+  if (!completed.length && !anchor) throw results[0].reason;
+  const items = new Map([...(anchor ? [anchor] : []), ...completed.flatMap(result => result.value.items)].map(item => [item.id, item]));
   const candidates = matchingItems([...items.values()], metadata).slice(0, 8);
-  const details = await Promise.allSettled(candidates.map(candidate => detail(candidate.id, env)));
+  const details = await Promise.allSettled(candidates.map(candidate => candidate.id === anchor?.id ? anchor : detail(candidate.id, env)));
   const choices = [];
   let failure;
   for (const result of details) {
@@ -218,10 +241,13 @@ async function resolveCatalog(metadata, source, data, request, env) {
     try { choices.push(...episodeChoices(result.value, metadata).map(selected => ({ video: result.value, ...selected }))); }
     catch (err) { failure = err; }
   }
+  if (!metadata.episodeKey && (failure?.code === 'EPISODE_AMBIGUOUS' || new Set(choices.map(choice => choice.key)).size > 1)) {
+    throw Object.assign(error('该日期或期数有多个版本，请从选集列表选择完整期名', 409), { code: 'EPISODE_AMBIGUOUS' });
+  }
   const probes = new Map();
   const routes = [];
   for (let offset = 0; offset < choices.length; offset += 4) {
-    const batch = await Promise.allSettled(choices.slice(offset, offset + 4).map(async ({ video, line, episode, number }) => {
+    const batch = await Promise.allSettled(choices.slice(offset, offset + 4).map(async ({ video, line, episode, number, key }) => {
       if (!probes.has(episode.url)) probes.set(episode.url, probeCatalogMedia(episode.url));
       const probe = await probes.get(episode.url);
       const media = await signCatalogMedia(probe.url, env.PUBLIC_ORIGIN || request.url, env.MEDIA_SECRET);
@@ -230,7 +256,8 @@ async function resolveCatalog(metadata, source, data, request, env) {
         name: video.sourceName + ' · ' + line.name + ' · ' + probe.quality.label + ' · ' + probe.latencyMs + 'ms',
         type: probe.type,
         match: { id: video.id, title: video.title, year: video.year, sourceId: video.sourceId, sourceName: video.sourceName,
-          line: line.id, lineName: line.name, episode: episode.id, episodeTitle: episode.title, episodeNumber: number },
+          line: line.id, lineName: line.name, episode: episode.id, episodeTitle: episode.title, episodeNumber: number,
+          episodeKey: key || episodeIdentity(episode.title).key },
       };
     }));
     for (const result of batch) {
@@ -241,7 +268,8 @@ async function resolveCatalog(metadata, source, data, request, env) {
   sortRoutes(routes);
   if (!routes.length) throw failure || error('采集站未提供可用资源', 404);
   const episodes = availableEpisodes(details.filter(result => result.status === 'fulfilled').map(result => result.value));
-  return { kind: 'playback', provider: 'cms', source, ...routes[0], metadata, routes, episodes, selectedEpisodeNumber: routes[0].match.episodeNumber, selectedRouteId: routes[0].id };
+  return { kind: 'playback', provider: 'cms', source, ...routes[0], metadata, routes, episodes, selectedEpisodeNumber: routes[0].match.episodeNumber,
+    selectedEpisodeKey: metadata.episodeKey || routes[0].match.episodeKey, selectedRouteId: routes[0].id };
 }
 
 export default {

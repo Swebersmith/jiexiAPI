@@ -61,6 +61,8 @@
 
 可选 `source` 指定采集源。`episode` 可指定正整数集数或 `YYYYMMDD` 日期，`year` 可确认同名影片的年份。合集链接默认选择第 1 集。实际视频 URL 来自已配置采集站，可用范围取决于采集站收录情况。
 
+选集推荐使用 `POST /api/player/resolve`，请求体为 `{"episodeRef":{"id":"采集源id:影片id","line":"线路id","lineName":"线路名称","episode":"条目id","title":"完整期名"}}`。响应 `episodes` 中提供可直接回传的 `episodeRef` 和稳定的 `key`，`selectedEpisodeKey` 标识当前选集。后端校验原始条目，再按日期、期数、上中下部分及版本匹配其他采集源。上下期、加更、沉浸等分别列出，无数字期名也可选择。同一日期存在多个版本时，只提供 `episodeNumber` 会返回 `EPISODE_AMBIGUOUS`，需选择完整期名。采集站更新排序时按原期名重新定位，条目移除后返回 409 并提示刷新。
+
 元信息读取失败返回 `PAGE_METADATA_UNAVAILABLE`，同名不同年份难以区分返回 `AMBIGUOUS_RESOURCE`，未收录返回 `RESOURCE_NOT_FOUND`，集数未识别或未更新分别返回 `EPISODE_UNDETERMINED`、`EPISODE_NOT_FOUND`。网页识别与每个采集站请求均有 12 秒超时，最多尝试 8 条同名候选详情。
 
 B 站公开接口与移动页面无法读取时，使用 `BROWSER` 绑定的 Cloudflare Browser Run 获取正常浏览器页面元信息。识别结果在 D1 缓存 24 小时。浏览器会阻止视频、图片、字体请求，只读取页面元信息，完成后关闭会话。浏览器使用量按账户的 Browser Run 配额计量，详见 [Cloudflare 定价](https://developers.cloudflare.com/browser-run/pricing/)。

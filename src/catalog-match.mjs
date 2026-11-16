@@ -1,4 +1,5 @@
 import { chineseNumber, episodeNumber } from './page-metadata.mjs';
+import { lineEpisodeIdentities, episodeReference } from './episode-identity.mjs';
 
 const fail = (message, code, status = 404) => Object.assign(new Error(message), { status, code });
 const playableMedia = /\.(?:m3u8|mp4|m4v|webm)(?:[?#]|$)/i;
@@ -75,30 +76,41 @@ export function matchingItems(items, metadata) {
 }
 
 export function episodeChoices(detail, metadata) {
-  const lines = detail.lines.map(line => ({ ...line, episodes: line.episodes.filter(episode => playableMedia.test(episode.url)) })).filter(line => line.episodes.length);
+  const lines = detail.lines.map(line => ({ ...line,
+    entries: lineEpisodeIdentities(line).filter(({ episode }) => playableMedia.test(episode.url)),
+  })).filter(line => line.entries.length);
   let requested = metadata.episode;
-  if (requested === null || requested === undefined) {
-    if (lines.some(line => line.episodes.length === 1 && !/剧$|电视剧|动漫|动画|综艺|番剧|连续剧/.test(detail.type || ''))) {
-      return lines.filter(line => line.episodes.length === 1).map(line => ({ line, episode: line.episodes[0], number: null }));
+  if ((requested === null || requested === undefined) && !metadata.episodeKey) {
+    if (lines.some(line => line.entries.length === 1 && !/剧$|电视剧|动漫|动画|综艺|番剧|连续剧/.test(detail.type || ''))) {
+      return lines.filter(line => line.entries.length === 1).map(line => ({ line, episode: line.entries[0].episode, number: null }));
     } else if (metadata.isCollection) requested = 1;
     else throw fail('网页未提供当前集数，请提供 episode 参数或使用具体分集链接', 'EPISODE_UNDETERMINED', 422);
   }
   const choices = [];
+  let ambiguous = false;
   for (const line of lines) {
-    const episode = line.episodes.find(episode => String(episodeNumber(episode.title)) === String(requested));
-    if (episode) choices.push({ line, episode, number: requested });
+    const matches = line.entries.filter(({ episode, identity }) => metadata.episodeKey
+      ? identity.key === metadata.episodeKey
+      : String(episodeNumber(episode.title)) === String(requested));
+    const anchor = metadata.episodeRef;
+    const exact = anchor && anchor.id === detail.id && line.id === anchor.line
+      ? matches.find(({ episode }) => episode.id === anchor.episode && episode.title === anchor.title) : undefined;
+    const selected = exact || (matches.length === 1 ? matches[0] : undefined);
+    if (selected) choices.push({ line, episode: selected.episode, number: selected.identity.number ?? null, key: selected.identity.key });
+    else if (matches.length > 1) ambiguous = true;
   }
   if (choices.length) return choices;
+  if (ambiguous) throw fail('该日期或期数有多个版本，请从选集列表选择完整期名', 'EPISODE_AMBIGUOUS', 409);
   throw fail('采集站暂未提供《' + metadata.title + '》第 ' + requested + ' 集/期的可用视频', 'EPISODE_NOT_FOUND');
 }
 
 export function availableEpisodes(details) {
   const episodes = new Map();
-  for (const detail of details) for (const line of detail.lines) for (const episode of line.episodes) {
-    const number = episodeNumber(episode.title);
-    if (number && playableMedia.test(episode.url) && !episodes.has(number)) episodes.set(number, { number, title: episode.title });
+  for (const detail of details) for (const line of detail.lines) for (const { episode, identity: { key, number } } of lineEpisodeIdentities(line)) {
+    if (playableMedia.test(episode.url) && !episodes.has(key)) episodes.set(key, { number: number ?? episodes.size + 1, title: episode.title, key,
+      ...(detail.id ? { episodeRef: episodeReference(detail, line, episode) } : {}) });
   }
-  return [...episodes.values()].sort((a, b) => a.number - b.number);
+  return [...episodes.values()].sort((a, b) => Number(a.key.startsWith('title:')) - Number(b.key.startsWith('title:')) || a.number - b.number);
 }
 
 export function selectEpisode(detail, metadata) { return episodeChoices(detail, metadata)[0]; }
