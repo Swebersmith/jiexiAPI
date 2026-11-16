@@ -4,7 +4,7 @@ import { loadConfig } from './config.mjs';
 import { identifyPage, episodeNumber } from './page-metadata.mjs';
 import { catalogIdentity, catalogLanguage, catalogQueries, matchingItems, episodeChoices, availableEpisodes } from './catalog-match.mjs';
 import { probeCatalogMedia, sortRoutes } from './media-probe.mjs';
-import { resolveParserServices } from './parser-services.mjs';
+import { resolveParserServices, qlParser } from './parser-services.mjs';
 
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
 const json = (data, status = 200) => Response.json(data, { status, headers: {
@@ -151,7 +151,8 @@ async function resolve(data, request, env) {
   if (env.PAGE_ENABLED === false) throw error('管理后台已停用网页资源解析', 503);
   const services = JSON.parse(env.PARSER_SERVICES || '[]').filter(service => service.enabled);
   if (!['auto', 'cms'].includes(parser)) {
-    const selected = services.find(service => service.id === parser);
+    const configured = JSON.parse(env.PARSER_SERVICES || '[]').find(service => service.id === parser);
+    const selected = configured?.enabled ? configured : !configured && parser === 'ql' ? qlParser : undefined;
     if (!selected) throw error('解析接口不存在或未启用', 404);
     if (data.episode !== undefined || data.year !== undefined) throw error('指定解析接口时请使用对应分集的网页 URL');
     const resolved = await resolveParserServices([selected], target.href, request, env, readText);

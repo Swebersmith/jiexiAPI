@@ -1,4 +1,4 @@
-import { allowed, signCatalogMedia } from './parser-resolver.mjs';
+import { allowed, signCatalogMedia, resolveQlMedia } from './parser-resolver.mjs';
 import { probeCatalogMedia } from './media-probe.mjs';
 
 const fail = (message, status = 400, code = 'INVALID_REQUEST') => Object.assign(new Error(message), { status, code });
@@ -6,6 +6,7 @@ const fieldPattern = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const pathPattern = /^(?:[A-Za-z_][A-Za-z0-9_]*|\d+)(?:\.(?:[A-Za-z_][A-Za-z0-9_]*|\d+))*$/;
 const forbiddenFields = new Set(['__proto__', 'constructor', 'prototype']);
 const reservedHeaders = /^(?:host|content-length|connection|transfer-encoding|x-crayon-resolver-hop)$/i;
+export const qlParser = { id: 'ql', name: 'QL · 麒麟', url: 'https://svip.qlplayer.cyou/', enabled: true, method: 'QL', urlParam: 'url', responsePath: '', headers: {}, params: {} };
 
 function objectFields(value, headers = false) {
   if (!value || Array.isArray(value) || typeof value !== 'object' || Object.keys(value).length > 16) throw fail('额外参数和请求头须为最多 16 项的 JSON 对象');
@@ -30,8 +31,9 @@ export function validateParsers(value = []) {
     const method = parser.method ?? 'GET';
     const urlParam = parser.urlParam ?? 'url';
     const responsePath = parser.responsePath ?? '';
-    if (!['GET', 'POST'].includes(method) || typeof urlParam !== 'string' || !fieldPattern.test(urlParam) || forbiddenFields.has(urlParam) || typeof responsePath !== 'string' || responsePath.length > 160 || responsePath && (!pathPattern.test(responsePath) || responsePath.split('.').some(key => forbiddenFields.has(key)))) throw fail('请检查请求方法、视频参数名和返回地址字段');
+    if (!['GET', 'POST', 'QL'].includes(method) || typeof urlParam !== 'string' || !fieldPattern.test(urlParam) || forbiddenFields.has(urlParam) || typeof responsePath !== 'string' || responsePath.length > 160 || responsePath && (!pathPattern.test(responsePath) || responsePath.split('.').some(key => forbiddenFields.has(key)))) throw fail('请检查请求方法、视频参数名和返回地址字段');
     const url = allowed(parser.url, { allowWorkers: true });
+    if (method === 'QL' && url.href !== qlParser.url) throw fail('QL 适配器地址须为 https://svip.qlplayer.cyou/');
     if (url.href.length > 2048) throw fail('解析接口地址过长');
     return { id: parser.id, name: parser.name.trim(), url: url.href, enabled: parser.enabled, method, urlParam, responsePath,
       headers: objectFields(parser.headers ?? {}, true), params: objectFields(parser.params ?? {}) };
@@ -86,7 +88,8 @@ async function resolveParser(parser, source, request, env, readText, remaining) 
   const endpoint = new URL(parser.url);
   const origins = new Set([new URL(request.url).origin, env.PUBLIC_ORIGIN && new URL(env.PUBLIC_ORIGIN).origin]);
   if (origins.has(endpoint.origin) && /^\/(?:api\/(?:resolve|player\/resolve)|parse)\/?$/.test(endpoint.pathname)) throw fail('解析接口不能指向本服务的解析入口', 502, 'PARSER_LOOP');
-  const data = await parserResponse(parser, source, AbortSignal.timeout(Math.max(1, Math.min(12000, remaining))), readText);
+  const signal = AbortSignal.timeout(Math.max(1, Math.min(parser.method === 'QL' ? 25000 : 12000, remaining)));
+  const data = parser.method === 'QL' ? await resolveQlMedia(source, signal) : await parserResponse(parser, source, signal, readText);
   const media = mediaAddress(data, parser);
   const type = [field(data, 'type'), field(data, 'data.type'), field(data, 'format'), field(data, 'data.format')].find(value => typeof value === 'string') || '';
   const probe = await probeCatalogMedia(media, /m3u8|mpegurl|^hls$/i.test(type) ? 'm3u8' : '');

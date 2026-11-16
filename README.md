@@ -23,6 +23,8 @@
 
 在管理后台的“解析接口”中添加返回 JSON 媒体地址的 HTTPS 服务。支持添加、编辑、启停、移除和上下调整顺序，最多配置 8 个接口。配置与采集源共用 D1 存储和版本校验，旧配置自动补充空接口列表。
 
+内置 QL 麒麟适配器可通过 `{"url":"视频网页地址","parser":"ql"}` 调用，管理后台“解析测试”也可选择 QL。适配器沿用原有页面临时凭据流程，再检测媒体并签名返回。要让 QL 参与自动回退或合并比选，在“解析接口”中新增一项，请求方式选择“QL · 麒麟适配器”，地址自动填为 `https://svip.qlplayer.cyou/`。保存标识为 `ql` 的停用配置可关闭内置入口。QL 凭据流程共用 25 秒超时预算。
+
 每个接口可配置 `id`、`name`、`url`、`method`（GET 或 POST JSON）、`urlParam`（默认 `url`）、`responsePath`、`headers` 和 `params`。GET 将视频地址和额外参数写入查询字符串，POST 将它们写入 JSON 请求体。接口地址内已有的查询参数继续用于请求。请求头和参数对象各限 4 KiB、16 项，密钥可配置在地址参数或 `Authorization` 请求头中，公共解析响应仅包含接口标识和名称。
 
 `responsePath` 留空时自动识别 `url`、`data.url`、`data.0.url` 等常见字段，也可填写 `payload.video.url` 一类点分路径。JSON 返回示例为 `{"code":200,"url":"https://cdn.site/video.m3u8","type":"m3u8"}`。后台接收 JSON 媒体地址，网页型解析页面需由服务方提供对应 JSON API。返回的媒体会经过可用性与实际分辨率检测，并生成现有签名转发地址。
@@ -52,6 +54,8 @@
 成功响应含 `kind: "playback"`、`provider: "cms"`、`url`、`originalUrl`、`type`、`direct: false`、`expiresAt`，以及 `metadata` 和 `match`。`match` 包含采集源、影片 ID、年份、线路和分集信息。后端检测媒体可用性并跳过不可访问的采集源，返回有效期 2 小时的签名播放地址。HLS 清单、子清单、密钥与分片经后端转发，Crayon 可直接播放该地址。
 
 响应的 `routes` 包含同一分集在各采集站中的可用线路，按分辨率像素数降序、连接响应延迟升序排列。顶层 `url`、`match`、`quality`、`latencyMs` 与 `routes[0]` 一致，`selectedRouteId` 标识默认线路。每条线路包含可用于播放器菜单的 `id`、`name`、`url`、`type`。
+
+签名媒体入口默认在 Workers 后端过滤已识别的 HLS 点播广告分片，再改写媒体、分片和密钥地址。`ads=0` 可在同一签名地址上关闭过滤，该状态会传递给子清单。清单中的 `#CRAYON-AD-FILTER` 注释包含原片时长与移除区间，供 crayonplayer 恢复原片时间和断点续播。独立音轨或字幕、多状态不受支持的清单保持完整，视频画面内直接合成的广告无法通过分片过滤移除。
 
 清晰度从 HLS 最高分辨率变体、AVC/HEVC 视频头或 MP4 初始化信息读取，`quality.source` 表明来源。分辨率无法读取时显示“清晰度未知”，排在已识别线路之后。`latencyMs` 为 Cloudflare 后端请求视频分片或文件得到响应的耗时，同等清晰度优先较低延迟。HLS 主清单及其音轨、画质列表继续完整提供。播放器右下角的“线路”菜单展示排序结果，手动切换保留播放位置与播放状态。
 

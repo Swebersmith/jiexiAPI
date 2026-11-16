@@ -1,3 +1,5 @@
+import { filterVodAdSegments } from './vod-segment-filter.mjs';
+
 const BASE='https://svip.qlplayer.cyou/';
 const enc=new TextEncoder();
 const fail=(message,status=502)=>Object.assign(new Error(message),{status});
@@ -69,7 +71,7 @@ async function validateFirstSegment(text,base,depth=0){
 }
 async function key(env){return crypto.subtle.importKey('raw',enc.encode(env.secret),{name:'HMAC',hash:'SHA-256'},false,['sign','verify']);}
 const hex=b=>Array.from(new Uint8Array(b),v=>v.toString(16).padStart(2,'0')).join('');
-async function relay(url,origin,env,expires){allowed(url);const u=new URL('/api/jiexi/resolved-media',origin);u.searchParams.set('url',url);u.searchParams.set('exp',expires);const sig=await crypto.subtle.sign('HMAC',await key(env),enc.encode(expires+'\n'+url));u.searchParams.set('sig',hex(sig));return u.href;}
+async function relay(url,origin,env,expires){allowed(url);const u=new URL('/api/jiexi/resolved-media',origin);u.searchParams.set('url',url);u.searchParams.set('exp',expires);if(env.blockAds===false)u.searchParams.set('ads','0');const sig=await crypto.subtle.sign('HMAC',await key(env),enc.encode(expires+'\n'+url));u.searchParams.set('sig',hex(sig));return u.href;}
 export async function signCatalogMedia(raw, origin, secret) {
  const original = allowed(raw).href;
  if (!secret) throw fail('请配置 MEDIA_SECRET',503);
@@ -77,9 +79,41 @@ export async function signCatalogMedia(raw, origin, secret) {
  return { url: await relay(original, origin, {secret}, expires), originalUrl: original, expiresAt: Number(expires)*1000, direct: false };
 }
 async function verify(u,env){const exp=u.searchParams.get('exp'),url=u.searchParams.get('url'),sig=u.searchParams.get('sig')||'';if(!/^\d+$/.test(exp||'')||Number(exp)<Date.now()/1000||Number(exp)>Date.now()/1000+7500||!/^[a-f0-9]{64}$/.test(sig))throw fail('播放凭据已过期，请重新解析',403);allowed(url);const bytes=Uint8Array.from(sig.match(/../g),v=>parseInt(v,16));if(!await crypto.subtle.verify('HMAC',await key(env),bytes,enc.encode(exp+'\n'+url)))throw fail('播放凭据无效',403);return {url,exp};}
-export async function rewrite(text,base,origin,env,exp){if(!text.trim().startsWith('#EXTM3U'))throw fail('上游未返回 HLS 播放列表');const lines=[];for(let line of text.split(/\r?\n/)){if(line&&!line.startsWith('#'))line=await relay(new URL(line,base).href,origin,env,exp);else if(line.includes('URI="')){const hits=[...line.matchAll(/URI="([^"]+)"/g)];for(const m of hits)line=line.replace(m[0],'URI="'+await relay(new URL(m[1],base).href,origin,env,exp)+'"');}lines.push(line);}return lines.join('\n');}
+export async function rewrite(text, base, origin, env, exp) {
+ text = text.replace(/^\uFEFF/, '');
+ if (!text.trim().startsWith('#EXTM3U')) throw fail('上游未返回 HLS 播放列表');
+ const master = /^#EXT-X-STREAM-INF:/m.test(text);
+ const externalTracks = text.split(/\r?\n/).some(line => line.startsWith('#EXT-X-MEDIA:') && /TYPE=(?:AUDIO|SUBTITLES)(?:,|$)/.test(line) && /URI=/.test(line));
+ const blockAds = env.blockAds !== false && !externalTracks;
+ if (!master && blockAds) {
+   const result = filterVodAdSegments(text, base);
+   const metadata = JSON.stringify({ version: 1, originalDuration: result.originalDuration, removed: result.removed, reason: result.reason });
+   text = result.playlist.replace(/^(\uFEFF?#EXTM3U)(\r?\n|$)/, '$1\n#CRAYON-AD-FILTER:' + metadata + '\n');
+ }
+ const lines = [];
+ for (let line of text.split(/\r?\n/)) {
+   if (line && !line.startsWith('#')) line = await relay(new URL(line, base).href, origin, { ...env, blockAds }, exp);
+   else if (line.includes('URI="')) {
+     for (const match of [...line.matchAll(/URI="([^"]+)"/g)])
+       line = line.replace(match[0], 'URI="' + await relay(new URL(match[1], base).href, origin, { ...env, blockAds }, exp) + '"');
+   }
+   lines.push(line);
+ }
+ return lines.join('\n');
+}
 const mediaCors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET, HEAD, OPTIONS','Access-Control-Allow-Headers':'Range, If-Range','Access-Control-Expose-Headers':'Content-Length, Content-Range, Accept-Ranges'};
 const json=(data,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
+export async function resolveQlMedia(raw, signal = AbortSignal.timeout(25000)) {
+ const source = normalize(raw);
+ const page = BASE + '?url=' + encodeURIComponent(source);
+ const html = await bounded(await upstream(page, {}, false, signal));
+ const match = html.match(/apiToken\s*:\s*("(?:\\.|[^"\\])*")/);
+ if (!match) throw fail('QL 解析服务未提供凭据，可能已调整授权规则');
+ const token = JSON.parse(match[1]);
+ const parsed = JSON.parse(await bounded(await upstream(BASE + 'api/resolve.php?token=' + encodeURIComponent(token), { Referer: page }, false, signal)));
+ if (parsed.code !== 200 || !parsed.url) throw fail('QL 上游解析失败');
+ return { url: allowed(parsed.url).href, type: parsed.type || '' };
+}
 export async function handleParserResolver(request,env){const u=new URL(request.url);if(!['/api/player/resolve','/api/jiexi/resolved-media'].includes(u.pathname)&&!u.pathname.startsWith('/api/jiexi/resolved/'))return null;try{
  if(request.method==='OPTIONS'&&u.pathname!=='/api/player/resolve')return new Response(null,{status:204,headers:mediaCors});
  if(['GET','POST'].includes(request.method)&&u.pathname==='/api/player/resolve'){
@@ -90,11 +124,8 @@ export async function handleParserResolver(request,env){const u=new URL(request.
   let data;if(request.method==='GET'){if(request.headers.get('Sec-Fetch-Site')==='cross-site')throw fail('请求来源不匹配',403);data={url:u.searchParams.get('url')};}else{const body=await bounded(new Response(request.body),4096);try{data=JSON.parse(body);}catch{throw fail('请求格式错误',400);}}
   if(data.parser!==undefined&&data.parser!=='ql')throw fail('未知解析线路',400);
   const source=normalize(data.url);const page=BASE+'?url='+encodeURIComponent(source);
-  const html=await bounded(await upstream(page));const m=html.match(/apiToken\s*:\s*("(?:\\.|[^"\\])*")/);
-  if(!m)throw fail('解析服务未提供凭据，可能已调整授权规则');
-  const token=JSON.parse(m[1]);const parsed=JSON.parse(await bounded(await upstream(BASE+'api/resolve.php?token='+encodeURIComponent(token),{Referer:page})));
-  if(parsed.code!==200||!parsed.url)throw fail(parsed.msg||'上游解析失败');
-  const original=allowed(parsed.url).href;
+  const parsed=await resolveQlMedia(source);
+  const original=parsed.url;
   const exp=String(Math.floor(Date.now()/1000)+7200);
   let isHls=parsed.type==='m3u8'||/\.m3u8(?:\?|$)/i.test(original);
   if(!isHls){
@@ -127,7 +158,7 @@ export async function handleParserResolver(request,env){const u=new URL(request.
   let r=await upstream(url,headers,true);
   if(!r.ok){await r.body?.cancel();throw fail('媒体服务器返回 HTTP '+r.status);}
   const type=r.headers.get('content-type')||'';
-  if(/\.m3u8(?:\?|$)/i.test(url)||/mpegurl/i.test(type)){const text=await bounded(r);return new Response(await rewrite(text,url,u.origin,env,exp),{headers:{...mediaCors,'Content-Type':'application/vnd.apple.mpegurl','Cache-Control':'no-store'}});}
+  if(/\.m3u8(?:\?|$)/i.test(url)||/mpegurl/i.test(type)){const text=await bounded(r);const playlist=await rewrite(text,url,u.origin,{...env,blockAds:u.searchParams.get('ads')!=='0'},exp);return new Response(request.method==='HEAD'?null:playlist,{headers:{...mediaCors,'Content-Type':'application/vnd.apple.mpegurl','Cache-Control':'no-store'}});}
   r=await mediaRange(r,range);
   const out=new Headers({...mediaCors,'Content-Type':type.toLowerCase().includes('video/mp4')?'video/mp4':'application/octet-stream','Cache-Control':'private, max-age=120','X-Content-Type-Options':'nosniff'});
   for(const h of ['Content-Range','Content-Length','Accept-Ranges'])if(r.headers.has(h))out.set(h,r.headers.get(h));

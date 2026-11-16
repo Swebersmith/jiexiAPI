@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../src/worker.mjs';
-import { validateParsers } from '../src/parser-services.mjs';
+import { validateParsers, qlParser } from '../src/parser-services.mjs';
 import { validateConfig } from '../src/config.mjs';
 import { client } from '../src/admin-page.mjs';
 
@@ -12,6 +12,40 @@ const environment = (parsers, extra = {}) => ({ MEDIA_SECRET: 'parser-services-m
   PARSER_SERVICES: JSON.stringify(parsers), ...extra });
 const request = (env, data) => worker.fetch(new Request('https://api.demo.site/api/resolve', { method: 'POST', body: JSON.stringify(data) }), env);
 const manifest = (width = 1920, height = 1080) => '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=' + width + 'x' + height + '\nmedia.m3u8';
+
+test('restores QL token resolution through the unified endpoint, explicit selection and configured fallback', async () => {
+  const original = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async input => {
+    const url = new URL(input); calls.push(url.hostname);
+    if (url.hostname === 'svip.qlplayer.cyou') {
+      if (url.pathname === '/') {
+        assert.equal(url.searchParams.get('url'), source);
+        return new Response('player = {apiToken: "temporary+token"}');
+      }
+      assert.equal(url.searchParams.get('token'), 'temporary+token');
+      return Response.json({ code: 200, type: 'm3u8', url: 'https://ql.cdn.demo.site/master.m3u8' });
+    }
+    const response = catalog(url); if (response) return response;
+    return media(url);
+  };
+  try {
+    const response = await request(environment([]), { url: source, parser: 'ql' });
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(data.parserId, 'ql');
+    assert.equal(data.quality.width, 1920);
+    assert.equal(new URL(data.url).pathname, '/api/jiexi/resolved-media');
+    assert.equal(JSON.stringify(data).includes('temporary+token'), false);
+    assert.equal(calls.includes('cms.demo.site'), false);
+    const fallback = await request(environment([qlParser]), { url: source });
+    assert.equal((await fallback.json()).parserId, 'ql');
+    const disabled = await request(environment([{ ...qlParser, enabled: false }]), { url: source, parser: 'ql' });
+    assert.equal(disabled.status, 404);
+    assert.equal(validateParsers([qlParser])[0].method, 'QL');
+    assert.throws(() => validateParsers([{ ...qlParser, url: 'https://other.demo.site/' }]));
+  } finally { globalThis.fetch = original; }
+});
 function media(url, width = 1920, height = 1080) {
   if (url.pathname.endsWith('master.m3u8')) return new Response(manifest(width, height));
   if (url.pathname.endsWith('media.m3u8') || url.pathname === '/stream') return new Response('#EXTM3U\n#EXTINF:6,\n0.m4s\n#EXT-X-ENDLIST', { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
