@@ -131,12 +131,19 @@ test('includes a newly configured fourth source and reports its HTTP failures wi
     assert.equal(unavailable.unavailableRoutes[0].available, false);
     assert.equal(unavailable.unavailableRoutes[0].upstreamStatus, 403);
     assert.equal(unavailable.unavailableRoutes[0].reason, '播放清单返回 HTTP 403');
+    assert.equal(unavailable.browserRoutes.length, 1);
+    assert.equal(unavailable.browserRoutes[0].match.sourceId, 'ffzy');
+    assert.equal(unavailable.browserRoutes[0].type, 'm3u8');
+    assert.equal(unavailable.browserRoutes[0].url, 'https://ffzy.cdn.demo.site/master.m3u8');
     assert.equal(unavailable.url, unavailable.routes[0].url);
     assert.equal(JSON.stringify(unavailable).includes('upstream-private-debug-text'), false);
     const failed = await worker.fetch(new Request('https://api.demo.site/api/player/resolve', { method: 'POST', body: JSON.stringify({ id: 'ffzy:1', episodeNumber: 1, source: 'ffzy' }) }), environment);
     const data = await failed.json();
     assert.equal(failed.status, 502);
     assert.equal(data.unavailableRoutes[0].sourceId, 'ffzy');
+    assert.equal(data.browserRoutes[0].match.episodeTitle, '第01集');
+    assert.equal(data.routes.length, 0);
+    assert.ok(data.episodes.length);
   } finally { globalThis.fetch = original; }
 });
 

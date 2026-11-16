@@ -194,11 +194,12 @@ async function resolve(data, request, env) {
   if (catalog && env.PARSER_MODE !== 'combined') return json(catalog);
   const resolved = await resolveParserServices(services, target.href, request, env, readText, env.PARSER_MODE === 'combined');
   if (!catalog && !resolved.routes.length) {
+    if (failure?.browserPlayback) throw Object.assign(failure, { parserResults: resolved.results });
     const err = error('采集源与解析接口均未提供可用视频', 502);
     err.parserResults = resolved.results;
     throw err;
   }
-  return json(parserPlayback(target.href, catalog, resolved));
+  return json(parserPlayback(target.href, catalog || failure?.browserPlayback, resolved));
 }
 
 function parserPlayback(source, catalog, resolved) {
@@ -210,7 +211,7 @@ function parserPlayback(source, catalog, resolved) {
   }
   const selected = routes[0];
   return { kind: 'playback', source, ...selected, provider: selected.provider || 'cms', metadata: catalog?.metadata || null,
-    routes, unavailableRoutes: catalog?.unavailableRoutes || [], selectedRouteId: selected.id, episodes: catalog?.episodes || [],
+    routes, unavailableRoutes: catalog?.unavailableRoutes || [], browserRoutes: catalog?.browserRoutes || [], selectedRouteId: selected.id, episodes: catalog?.episodes || [],
     selectedEpisodeNumber: catalog?.selectedEpisodeNumber ?? null, selectedEpisodeKey: catalog?.selectedEpisodeKey ?? null, parserResults: resolved.results };
 }
 
@@ -243,6 +244,7 @@ async function resolveCatalog(metadata, source, data, request, env, anchor) {
   const details = await Promise.allSettled(candidates.map(candidate => candidate.id === anchor?.id ? anchor : detail(candidate.id, env)));
   const choices = [];
   const unavailableRoutes = [];
+  const browserRoutes = [];
   const unavailable = (video, stage, failure, line, episode) => {
     const status = stage === 'episode' ? undefined : /HTTP (\d{3})/.exec(failure?.message || '')?.[1];
     let reason = '片源检测失败';
@@ -291,6 +293,15 @@ async function resolveCatalog(metadata, source, data, request, env, anchor) {
       else {
         failure = result.reason;
         unavailable(video, 'media', failure, line, episode);
+        if (/HTTP 403\b/.test(failure.message) && /\.(m3u8|mp4|webm|m4v)$/i.test(new URL(episode.url).pathname)) {
+          browserRoutes.push({ id: video.id + ':' + line.id + ':' + episode.id, url: episode.url,
+            originalUrl: episode.url, name: video.sourceName + ' · ' + line.name + ' · 浏览器直连',
+            type: /\.m3u8$/i.test(new URL(episode.url).pathname) ? 'm3u8' : /\.webm$/i.test(new URL(episode.url).pathname) ? 'webm' : 'mp4',
+            transport: 'browser', ...(failure.durationSeconds ? { durationSeconds: failure.durationSeconds } : {}),
+            match: { id: video.id, title: video.title, year: video.year, sourceId: video.sourceId, sourceName: video.sourceName,
+              line: line.id, lineName: line.name, episode: episode.id, episodeTitle: episode.title, episodeNumber: pending[index].number,
+              episodeKey: pending[index].key || episodeIdentity(episode.title).key } });
+        }
       }
     }
   }
@@ -305,13 +316,17 @@ async function resolveCatalog(metadata, source, data, request, env, anchor) {
     routes.splice(index, 1);
   }
   sortRoutes(routes);
+  const episodes = availableEpisodes(details.filter(result => result.status === 'fulfilled').map(result => result.value));
+  const playback = { kind: 'playback', provider: 'cms', source, metadata, routes, unavailableRoutes,
+    browserRoutes: browserRoutes.filter(route => !outliers.has(route.originalUrl)), episodes,
+    selectedEpisodeNumber: routes[0]?.match.episodeNumber ?? metadata.episode,
+    selectedEpisodeKey: metadata.episodeKey || routes[0]?.match.episodeKey };
   if (!routes.length) {
     if (!choices.length) throw Object.assign(failure || error('未匹配到对应分集', 404), { unavailableRoutes });
-    throw Object.assign(error('已找到影片条目，但当前分集没有通过播放检测的线路', 502), { code: failure?.code === 'MEDIA_DURATION_MISMATCH' ? failure.code : 'NO_PLAYABLE_ROUTE', unavailableRoutes });
+    throw Object.assign(error('已找到影片条目，但当前分集没有通过播放检测的线路', 502), { code: failure?.code === 'MEDIA_DURATION_MISMATCH' ? failure.code : 'NO_PLAYABLE_ROUTE', unavailableRoutes,
+      ...(playback.browserRoutes.length ? { browserPlayback: playback } : {}) });
   }
-  const episodes = availableEpisodes(details.filter(result => result.status === 'fulfilled').map(result => result.value));
-  return { kind: 'playback', provider: 'cms', source, ...routes[0], metadata, routes, unavailableRoutes, episodes, selectedEpisodeNumber: routes[0].match.episodeNumber,
-    selectedEpisodeKey: metadata.episodeKey || routes[0].match.episodeKey, selectedRouteId: routes[0].id };
+  return { ...playback, ...routes[0], selectedRouteId: routes[0].id };
 }
 
 export default {
@@ -352,7 +367,7 @@ export default {
     } catch (err) {
       const status = err.status || 502;
       console.warn(JSON.stringify({ event: 'api_error', path: url.pathname, status }));
-      response = json({ error: { code: typeof err.code === 'string' ? err.code : (status === 400 ? 'INVALID_REQUEST' : 'RESOLVE_FAILED'), message: err.message },
+      response = json({ ...err.browserPlayback, error: { code: typeof err.code === 'string' ? err.code : (status === 400 ? 'INVALID_REQUEST' : 'RESOLVE_FAILED'), message: err.message },
         ...(err.parserResults ? { parserResults: err.parserResults } : {}), ...(err.unavailableRoutes ? { unavailableRoutes: err.unavailableRoutes } : {}) }, status);
     }
     const headers = new Headers(response.headers);
