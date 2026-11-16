@@ -1,5 +1,6 @@
 import { allowed } from './parser-resolver.mjs';
 import { validateParsers } from './parser-services.mjs';
+import { encryptAiKey, validateAiSearch } from './ai-search.mjs';
 
 export function validateConfig(value) {
   // The former QL switch controlled a separate upstream. CMS page matching starts enabled.
@@ -18,7 +19,7 @@ export function validateConfig(value) {
   const parsers = validateParsers(value.parsers);
   const parserMode = value.parserMode ?? 'fallback';
   if (!['fallback', 'combined'].includes(parserMode)) throw Object.assign(new Error('解析接口调用策略无效'), { status: 400 });
-  return { sources, pageEnabled, parsers, parserMode };
+  return { sources, pageEnabled, parsers, parserMode, aiSearch: validateAiSearch(value.aiSearch) };
 }
 
 export async function loadConfig(env) {
@@ -33,7 +34,18 @@ export async function saveConfig(env, data) {
   if (!env.CONFIG_DB) throw Object.assign(new Error('配置数据库尚未绑定'), { status: 503 });
   if (!Number.isSafeInteger(data.revision) || data.revision < 0) throw Object.assign(new Error('配置版本无效，请刷新页面'), { status: 400 });
   const current = await loadConfig(env);
-  const value = JSON.stringify(validateConfig({ ...current, ...data }));
+  let aiSearch = current.aiSearch;
+  if (data.aiSearch !== undefined) {
+    const incoming = data.aiSearch;
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) throw Object.assign(new Error('AI 搜索配置格式无效'), { status: 400 });
+    aiSearch = validateAiSearch({ ...current.aiSearch, enabled: incoming.enabled ?? current.aiSearch.enabled,
+      model: incoming.model ?? current.aiSearch.model });
+    if (incoming.clearKey !== undefined && typeof incoming.clearKey !== 'boolean') throw Object.assign(new Error('清除密钥选项无效'), { status: 400 });
+    if (incoming.clearKey) aiSearch.encryptedKey = '';
+    if (incoming.apiKey !== undefined && typeof incoming.apiKey !== 'string') throw Object.assign(new Error('API Key 格式无效'), { status: 400 });
+    if (incoming.apiKey?.trim()) aiSearch.encryptedKey = await encryptAiKey(incoming.apiKey.trim(), env);
+  }
+  const value = JSON.stringify(validateConfig({ ...current, ...data, aiSearch }));
   const updatedAt = new Date().toISOString();
   const statement = data.revision === 0
     ? env.CONFIG_DB.prepare('INSERT OR IGNORE INTO service_config (id, value, revision, updated_at) VALUES (1, ?, 1, ?)').bind(value, updatedAt)

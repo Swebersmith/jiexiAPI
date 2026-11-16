@@ -1,5 +1,6 @@
 import { html, client, styles } from './admin-page.mjs';
 import { loadConfig, saveConfig } from './config.mjs';
+import { publicAiSearch } from './ai-search.mjs';
 
 const encoder = new TextEncoder();
 const fail = (message, status) => Object.assign(new Error(message), { status });
@@ -40,11 +41,15 @@ export async function handleAdmin(request, env, readText) {
       } else {
         if (!await authenticated(request, env)) throw fail('请先登录管理后台', 401);
         if (url.pathname === '/admin/api/logout' && request.method === 'POST') response = reply({ ok: true }, 200, { 'Set-Cookie': 'jiexi_admin=; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=0' });
-        else if (url.pathname === '/admin/api/config' && request.method === 'GET') response = reply({ ...await loadConfig(env), publicOrigin: env.PUBLIC_ORIGIN || url.origin });
+        else if (url.pathname === '/admin/api/config' && request.method === 'GET') {
+          const config = await loadConfig(env);
+          response = reply({ ...config, aiSearch: publicAiSearch(config.aiSearch, env), publicOrigin: env.PUBLIC_ORIGIN || url.origin });
+        }
         else if (url.pathname === '/admin/api/config' && request.method === 'PUT') {
           let data;
           try { data = JSON.parse(await readText(new Response(request.body), 131072)); } catch { throw fail('配置请求格式无效或过大', 400); }
-          response = reply(await saveConfig(env, data));
+          const config = await saveConfig(env, data);
+          response = reply({ ...config, aiSearch: publicAiSearch(config.aiSearch, env) });
         } else throw fail('管理接口不存在', 404);
       }
     }

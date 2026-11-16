@@ -33,6 +33,28 @@ test('protects configuration and rejects login from a foreign origin', async () 
   } finally { env.db.close(); }
 });
 
+test('saves write-only encrypted AI credentials, preserves them on legacy saves and supports deployment-key fallback', async () => {
+  const env = environment(); env.GLM_API_KEY = 'deployed-test-key';
+  try {
+    const login = await call(env, '/admin/api/login', { method: 'POST', headers: { Origin: 'https://admin.demo.site' }, body: JSON.stringify({ password: env.ADMIN_PASSWORD }) });
+    const cookie = login.headers.get('Set-Cookie').split(';')[0];
+    const headers = { Cookie: cookie, Origin: 'https://admin.demo.site' };
+    const initial = await (await call(env, '/admin/api/config', { headers })).json();
+    const response = await call(env, '/admin/api/config', { method: 'PUT', headers, body: JSON.stringify({ ...initial, aiSearch: { enabled: true, model: 'glm-4-flash-250414', apiKey: 'new-private-key' } }) });
+    const saved = await response.json();
+    assert.equal(saved.aiSearch.keySource, 'custom');
+    assert.equal(saved.aiSearch.keyConfigured, true);
+    assert.equal(JSON.stringify(saved).includes('new-private-key'), false);
+    assert.equal(saved.aiSearch.encryptedKey, undefined);
+    assert.equal(env.db.prepare('SELECT value FROM service_config').get().value.includes('new-private-key'), false);
+    const before = (await loadConfig(env)).aiSearch.encryptedKey;
+    const legacy = await saveConfig(env, { sources: saved.sources, pageEnabled: true, revision: saved.revision });
+    assert.equal(legacy.aiSearch.encryptedKey, before);
+    const cleared = await call(env, '/admin/api/config', { method: 'PUT', headers, body: JSON.stringify({ ...saved, revision: legacy.revision, aiSearch: { clearKey: true } }) });
+    assert.equal((await cleared.json()).aiSearch.keySource, 'environment');
+  } finally { env.db.close(); }
+});
+
 test('logs in, updates persistent configuration, rejects stale saves and logs out', async () => {
   const env = environment();
   try {

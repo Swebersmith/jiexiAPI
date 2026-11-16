@@ -6,6 +6,7 @@ import { catalogIdentity, catalogLanguage, catalogQueries, matchingItems, episod
 import { probeCatalogMedia, sortRoutes } from './media-probe.mjs';
 import { resolveParserServices, qlParser } from './parser-services.mjs';
 import { episodeIdentity, episodeReference, lineEpisodeIdentities } from './episode-identity.mjs';
+import { filterSearchResults } from './ai-search.mjs';
 
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
 const json = (data, status = 200) => Response.json(data, { status, headers: {
@@ -102,7 +103,7 @@ async function detail(id, env) {
   return { ...item(video, source), lines: playLines(video) };
 }
 
-async function search(input, env, sourceId, page = '1') {
+async function search(input, env, sourceId, page = '1', useAi = true) {
   const query = typeof input === 'string' ? input.trim() : '';
   if (!query || query.length > 80 || /[\u0000-\u001f]/.test(query)) throw error('请输入 1–80 字片名');
   if (!/^[1-9]\d{0,3}$/.test(String(page))) throw error('页码无效');
@@ -118,7 +119,8 @@ async function search(input, env, sourceId, page = '1') {
     providers.push({ id: source.id, name: source.name, status: 'ok', page: Number(data.page || page), pageCount: Number(data.pagecount || 1) });
   });
   if (providers.every(provider => provider.status === 'unavailable')) throw error(providers.map(p => p.message).join('；'), 502);
-  return { kind: 'search', query, items, providers, warning: providers.some(p => p.status === 'unavailable') ? '部分采集源不可用' : '' };
+  const result = { kind: 'search', query, items, providers, warning: providers.some(p => p.status === 'unavailable') ? '部分采集源不可用' : '' };
+  return useAi ? filterSearchResults(result, env) : result;
 }
 
 async function resolve(data, request, env) {
@@ -228,7 +230,7 @@ async function resolvePageCatalog(target, data, request, env) {
 }
 
 async function resolveCatalog(metadata, source, data, request, env, anchor) {
-  const results = await Promise.allSettled(catalogQueries(metadata.title).map(query => search(query, env, data.source)));
+  const results = await Promise.allSettled(catalogQueries(metadata.title).map(query => search(query, env, data.source, '1', false)));
   const completed = results.filter(result => result.status === 'fulfilled');
   if (!completed.length && !anchor) throw results[0].reason;
   const items = new Map([...(anchor ? [anchor] : []), ...completed.flatMap(result => result.value.items)].map(item => [item.id, item]));
@@ -288,7 +290,7 @@ export default {
       if (['GET', 'POST'].includes(request.method) && ['/api/resolve', '/api/player/resolve', '/api/player/search', '/api/player/detail'].includes(url.pathname)) {
         const config = await loadConfig(env);
         env = { ...env, CMS_SOURCES: JSON.stringify(config.sources.filter(source => source.enabled)), PAGE_ENABLED: config.pageEnabled,
-          PARSER_SERVICES: JSON.stringify(config.parsers), PARSER_MODE: config.parserMode };
+          PARSER_SERVICES: JSON.stringify(config.parsers), PARSER_MODE: config.parserMode, AI_SEARCH_CONFIG: { ...config.aiSearch, revision: config.revision } };
       }
       if (request.method === 'OPTIONS') response = new Response(null, { status: 204 });
       else if (url.pathname === '/health' && request.method === 'GET') response = json({ ok: true, service: 'jiexi-api' });

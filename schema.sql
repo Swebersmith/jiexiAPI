@@ -9,3 +9,8 @@ CREATE TABLE IF NOT EXISTS page_metadata (
   value TEXT NOT NULL,
   expires_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ai_search_cache (
+  cache_key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);

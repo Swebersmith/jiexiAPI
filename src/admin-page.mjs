@@ -5,7 +5,7 @@ export const html = `<!doctype html>
   <form id="login-form" class="login-card"><div class="brand-mark">j<span>·</span></div><p class="eyebrow">CRAYON / JIEXI API</p><h1>管理你的解析服务</h1><p class="muted">采集源、解析线路与接口测试。</p><label for="password">管理密码</label><input id="password" type="password" required autocomplete="current-password" maxlength="256" placeholder="输入管理员密码"><button class="primary" type="submit">登录后台 <span>↗</span></button><p id="login-status" role="status"></p></form>
 </div>
 <div id="app-view" class="app-shell" hidden>
-  <aside class="sidebar"><a class="wordmark" href="/admin/">jiexi<span>API</span><i></i></a><p class="sidebar-caption">CRAYON PLAYER</p><nav aria-label="管理导航"><button class="nav-item active" data-section="overview"><span>◉</span>服务概览</button><button class="nav-item" data-section="sources"><span>▤</span>采集源管理</button><button class="nav-item" data-section="parsers"><span>⇄</span>解析接口</button><button class="nav-item" data-section="test"><span>⌘</span>解析测试</button></nav><div class="sidebar-bottom"><span class="status-dot"></span> Cloudflare Workers<button id="logout" class="text-button">退出登录 ↗</button></div></aside>
+  <aside class="sidebar"><a class="wordmark" href="/admin/">jiexi<span>API</span><i></i></a><p class="sidebar-caption">CRAYON PLAYER</p><nav aria-label="管理导航"><button class="nav-item active" data-section="overview"><span>◉</span>服务概览</button><button class="nav-item" data-section="sources"><span>▤</span>采集源管理</button><button class="nav-item" data-section="parsers"><span>⇄</span>解析接口</button><button class="nav-item" data-section="ai"><span>✧</span>AI 搜索</button><button class="nav-item" data-section="test"><span>⌘</span>解析测试</button></nav><div class="sidebar-bottom"><span class="status-dot"></span> Cloudflare Workers<button id="logout" class="text-button">退出登录 ↗</button></div></aside>
   <main><header class="topbar"><span>工作空间 <span class="slash">/</span> 解析服务</span><a id="player-link" href="https://crap.webber.qzz.io" target="_blank" rel="noopener">打开播放器 ↗</a></header>
   <div class="content"><div class="page-heading"><div><p class="eyebrow">SERVICE CONSOLE</p><h1 id="section-title">服务概览</h1><p id="section-description" class="muted">查看请求处理路径与当前部署配置。</p></div><button id="refresh" class="secondary">↻ 刷新配置</button></div>
   <div id="message" class="notice" role="status" hidden></div>
@@ -16,6 +16,12 @@ export const html = `<!doctype html>
   </section>
   <section data-page="sources" hidden><form id="config-form"><article class="panel"><div class="panel-heading"><div><h2>苹果 CMS 采集源</h2><p>支持 JSON 采集 API，最多配置 8 个源。</p></div><button id="add-source" class="secondary" type="button">＋ 添加采集源</button></div><div id="source-list"></div></article><article class="panel switch-panel"><div><h2>网页资源解析</h2><p>启用后，按采集源与解析接口策略处理视频网页。</p></div><label class="toggle-label"><input id="page-enabled" type="checkbox">启用网页解析</label></article><div class="save-bar"><span id="save-hint" class="muted">保存后生效</span><button id="save" type="submit" class="primary">保存配置 ↗</button></div></form></section>
   <section data-page="parsers" hidden><form id="parser-form"><article class="panel"><div class="panel-heading"><div><h2>解析接口服务</h2><p>接入 JSON 接口或 QL 内置适配器，最多配置 8 个。</p></div><button id="add-parser" type="button" class="secondary">＋ 添加解析接口</button></div><div id="parser-list"></div></article><article class="panel switch-panel"><div><h2>调用策略</h2><p>采集优先会在采集失败后按接口顺序尝试；合并比选会检测各接口结果并按清晰度、连接速度排序。</p></div><label for="parser-mode">解析策略<select id="parser-mode"><option value="fallback">采集优先，接口顺序回退</option><option value="combined">采集与接口合并比选</option></select></label></article><div class="save-bar"><span id="parser-save-hint" class="muted">保存并启用后，可在解析测试中选择接口。</span><button id="save-parsers" type="submit" class="primary">保存全部配置 ↗</button></div></form></section>
+  <section data-page="ai" hidden>
+    <form id="ai-form"><article class="panel switch-panel"><div><h2>AI 搜索筛选</h2><p>对采集站候选进行相关性判断，支持片名片段和少量错字，并校验片名相似度。</p></div><label class="toggle-label"><input id="ai-enabled" type="checkbox">启用 AI 筛选</label></article>
+    <article class="panel ai-fields"><label for="ai-model">模型名称<input id="ai-model" required maxlength="100" placeholder="glm-4-flash-250414"></label><label for="ai-key">GLM API Key<input id="ai-key" type="password" maxlength="2048" autocomplete="off" placeholder="留空保留现有密钥"><span id="ai-key-status" class="muted"></span></label><label id="ai-clear-key-label" class="toggle-label" hidden><input id="ai-clear-key" type="checkbox">清除自定义密钥，使用部署密钥</label><p class="muted">自定义密钥加密保存，页面仅显示配置状态。AI 服务异常时会显示采集站原始结果和状态提示。</p></article>
+    <div class="save-bar"><span id="ai-save-hint" class="muted">保存后生效</span><button type="submit" class="primary">保存 AI 配置 ↗</button></div></form>
+    <article class="panel"><div class="panel-heading"><div><h2>测试搜索筛选</h2><p>测试使用已保存配置，查看筛选数量和保留片名。</p></div></div><form id="ai-test-form" class="ai-test-form"><label for="ai-test-input">搜索词</label><div class="test-controls"><input id="ai-test-input" required maxlength="80" value="走马上任"><button id="ai-run-test" type="submit" class="primary">测试筛选 ↗</button></div><p id="ai-test-status" role="status" class="muted"></p><ul id="ai-test-results" class="ai-results-list"></ul></form></article>
+  </section>
   <section data-page="test" hidden><article class="panel"><div class="panel-heading"><div><h2>测试统一接口</h2><p>输入片名、媒体直链或视频网站播放页，查看真实接口响应。</p></div><code>POST /api/resolve</code></div><form id="test-form"><label for="test-parser">调用方式</label><select id="test-parser"><option value="auto">自动，使用已保存策略</option><option value="cms">仅采集源</option></select><label for="test-input">测试内容</label><div class="test-controls"><input id="test-input" required maxlength="8192" placeholder="例如 熊出没，或 https://…/video.m3u8"><button id="run-test" type="submit" class="primary">发起请求 ↗</button></div></form><div id="test-result" hidden><div class="test-meta"><span id="test-state"></span><span id="test-time" class="muted"></span></div><pre id="test-output"></pre></div></article></section>
   <footer><span>jiexiAPI <span class="slash">/</span> Crayon Player</span><span>配置管理与在线调试</span></footer>
   </div></main>
@@ -32,6 +38,13 @@ textarea { resize: vertical; min-height: 108px; font: 12px/1.6 Consolas, monospa
 .summary-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .parser-fields { display: grid; grid-template-columns: 140px 1fr 1.5fr; gap: 14px; margin-top: 16px; }
 .parser-fields input, .parser-fields select, #parser-mode { margin-top: 7px; }
+#ai-form { margin-bottom:24px; }
+.ai-fields,.ai-test-form { padding: 24px; }
+.ai-fields label { margin-bottom: 18px; }
+.ai-fields .muted { display:block; font-size:12px; margin-top:8px; }
+#ai-test-status { margin:16px 0; font-size:13px; }
+.ai-results-list { padding-left:20px; line-height:2; overflow-wrap:anywhere; }
+#ai-form .switch-panel { flex-wrap:wrap; }
 .parser-actions { display: flex; align-items: center; gap: 10px; }
 .parser-actions .secondary { padding: 3px 11px; }
 .parser-row details { margin-top: 14px; }
@@ -55,7 +68,7 @@ export const client = String.raw`
 const $ = selector => document.querySelector(selector);
 let config;
 let dirty = false;
-const sections = { overview: ['服务概览','查看请求处理路径与当前部署配置。'], sources: ['采集源管理','配置片名搜索的数据来源与网页解析线路。'], parsers: ['解析接口','添加解析服务，配置请求格式与调用顺序。'], test: ['解析测试','使用当前保存配置，检查接口实际响应。'] };
+const sections = { overview: ['服务概览','查看请求处理路径与当前部署配置。'], sources: ['采集源管理','配置片名搜索的数据来源与网页解析线路。'], parsers: ['解析接口','添加解析服务，配置请求格式与调用顺序。'], ai: ['AI 搜索','配置搜索结果筛选，减少采集站模糊匹配带来的无关影片。'], test: ['解析测试','使用当前保存配置，检查接口实际响应。'] };
 function notify(message, failed = false) { $('#message').hidden = false; $('#message').textContent = message; $('#message').classList.toggle('error', failed); }
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers }, cache: 'no-store' });
@@ -73,7 +86,7 @@ function sourceRow(source = { id: '', name: '', url: '', enabled: true }) {
   row.addEventListener('input', markDirty);
   $('#source-list').append(row);
 }
-function markDirty() { dirty = true; $('#save-hint').textContent = '有未保存的更改'; $('#parser-save-hint').textContent = '有未保存的更改'; }
+function markDirty() { dirty = true; $('#save-hint').textContent = '有未保存的更改'; $('#parser-save-hint').textContent = '有未保存的更改'; $('#ai-save-hint').textContent = '有未保存的更改'; }
 function parserOrder() {
   const rows = Array.from($('#parser-list').children);
   rows.forEach((row, index) => { row.querySelector('[data-move=up]').disabled = index === 0; row.querySelector('[data-move=down]').disabled = index === rows.length - 1; });
@@ -94,6 +107,12 @@ function parserRow(parser = { id: '', name: '', url: '', enabled: true, method: 
 function render(data) {
   config = data; dirty = false;
   $('#source-list').replaceChildren(); data.sources.forEach(sourceRow);
+  const ai = data.aiSearch || { enabled: false, model: 'glm-4-flash-250414' };
+  $('#ai-enabled').checked = ai.enabled; $('#ai-model').value = ai.model;
+  $('#ai-key').value = ''; $('#ai-clear-key').checked = false;
+  $('#ai-clear-key-label').hidden = ai.keySource !== 'custom';
+  $('#ai-key-status').textContent = ai.keyConfigured ? ai.keySource === 'custom' ? '已配置自定义密钥，留空保留' : '已配置 Cloudflare 部署密钥，留空使用' : '尚未配置 API Key';
+  $('#ai-save-hint').textContent = '保存后生效';
   $('#parser-list').replaceChildren(); (data.parsers || []).forEach(parserRow);
   $('#parser-mode').value = data.parserMode || 'fallback';
   $('#parser-count').textContent = String((data.parsers || []).filter(parser => parser.enabled).length);
@@ -139,7 +158,7 @@ $('#add-parser').onclick = () => { if ($('#parser-list').children.length >= 8) r
 async function saveConfiguration(event) {
   event.preventDefault();
   const sources = Array.from($('#source-list').children, row => ({ id: row.querySelector('[data-field=id]').value.trim(), name: row.querySelector('[data-field=name]').value.trim(), url: row.querySelector('[data-field=url]').value.trim(), enabled: row.querySelector('[data-field=enabled]').checked }));
-  const controls = Array.from(document.querySelectorAll('#config-form input,#config-form button,#parser-form input,#parser-form button,#parser-form select,#parser-form textarea'));
+  const controls = Array.from(document.querySelectorAll('#config-form input,#config-form button,#parser-form input,#parser-form button,#parser-form select,#parser-form textarea,#ai-form input,#ai-form button'));
   const disabled = controls.map(control => control.disabled);
   try {
     const parsers = Array.from($('#parser-list').children, row => {
@@ -152,7 +171,7 @@ async function saveConfiguration(event) {
       }
       return parser;
     });
-    const payload = { sources, parsers, parserMode: $('#parser-mode').value, pageEnabled: $('#page-enabled').checked, revision: config.revision };
+    const payload = { sources, parsers, parserMode: $('#parser-mode').value, pageEnabled: $('#page-enabled').checked, aiSearch: { enabled: $('#ai-enabled').checked, model: $('#ai-model').value.trim(), apiKey: $('#ai-key').value.trim(), clearKey: $('#ai-clear-key').checked }, revision: config.revision };
     controls.forEach(control => control.disabled = true);
     const saved = await api('/admin/api/config', { method: 'PUT', body: JSON.stringify(payload) });
     render(saved); notify('配置已保存，后续请求使用新配置。');
@@ -162,6 +181,22 @@ async function saveConfiguration(event) {
 }
 $('#config-form').addEventListener('submit', saveConfiguration);
 $('#parser-form').addEventListener('submit', saveConfiguration);
+$('#ai-form').addEventListener('submit', saveConfiguration);
+$('#ai-form').addEventListener('input', markDirty);
+$('#ai-form').addEventListener('change', markDirty);
+$('#ai-test-form').addEventListener('submit', async event => {
+  event.preventDefault(); $('#ai-run-test').disabled = true;
+  $('#ai-test-status').textContent = '正在搜索采集站并筛选…'; $('#ai-test-results').replaceChildren();
+  try {
+    const data = await api('/api/player/search?' + new URLSearchParams({ q: $('#ai-test-input').value.trim() }), { signal: AbortSignal.timeout(35000) });
+    const filter = data.aiFilter;
+    $('#ai-test-status').textContent = filter?.status === 'filtered'
+      ? filter.model + ' · ' + filter.inputCount + ' 条采集记录 → ' + filter.outputCount + ' 条相关记录 · ' + (filter.cacheHit ? '命中缓存' : '实时 AI 筛选')
+      : filter?.status === 'empty' ? '采集站没有返回候选，无需筛选' : filter?.status === 'unavailable' ? data.warning : 'AI 筛选已关闭 · ' + data.items.length + ' 条采集记录';
+    for (const item of data.items) { const row = document.createElement('li'); row.textContent = item.title + ' · ' + item.sourceName; $('#ai-test-results').append(row); }
+  } catch (error) { $('#ai-test-status').textContent = error.message; }
+  finally { $('#ai-run-test').disabled = false; }
+});
 $('#test-form').addEventListener('submit', async event => {
   event.preventDefault(); $('#run-test').disabled = true; $('#test-result').hidden = false; $('#test-state').textContent = '请求中…'; $('#test-output').textContent = ''; $('#test-time').textContent = '';
   const started = performance.now();
