@@ -33,6 +33,7 @@ export async function probeCatalogMedia(raw, type = '') {
       for (let depth = 0; depth < 4; depth++) {
         probeStage = 'playlist';
         const response = await upstream(url, {}, true, signal);
+        url = response.url || url;
         const manifest = new TextDecoder().decode(await bytes(response, 4 * 1024 * 1024, true));
         if (!manifest.trimStart().startsWith('#EXTM3U')) throw fail('采集站未返回有效 HLS 清单');
         const lines = manifest.split(/\r?\n/).map(line => line.trim());

@@ -58,7 +58,7 @@ async function validateFirstSegment(text,base,depth=0){
   if(line.startsWith('#EXT-X-BYTERANGE:')){const m=/^#EXT-X-BYTERANGE:(\d+)(?:@(\d+))?$/.exec(line);if(m){rangeLength=Number(m[1]);offset=m[2]?Number(m[2]):0;}continue;}
   if(line.startsWith('#'))continue;
   const target=new URL(line,base).href;
-  if(master){const child=await bounded(await upstream(target,{},true));return validateFirstSegment(child,target,depth+1);}
+  if(master){const response=await upstream(target,{},true);const child=await bounded(response);return validateFirstSegment(child,response.url||target,depth+1);}
   const length=rangeLength===null?1024:Math.min(1024,rangeLength),end=offset+length-1;
   const range=`bytes=${offset}-${end}`;const raw=await upstream(target,{Range:range},true);
   if(!raw.ok){await raw.body?.cancel();throw fail('上游视频分片返回 HTTP '+raw.status);}
@@ -139,9 +139,11 @@ export async function handleParserResolver(request,env){const u=new URL(request.
    const mp4=type.includes('video/mp4')||(first.length>=8&&String.fromCharCode(...first.subarray(4,8))==='ftyp');
    if(!isHls){if(!mp4)throw fail('解析结果暂不是可播放的 HLS 或 MP4 视频');return json({url:await relay(original,u.origin,env,exp),type:'mp4',expiresAt:Number(exp)*1000,source});}
   }
-  const manifest=await bounded(await upstream(original,{Referer:page},true));
-  await validateFirstSegment(manifest,original);
-  const rewritten=await rewrite(manifest,original,u.origin,env,exp);
+  const response=await upstream(original,{Referer:page},true);
+  const manifest=await bounded(response);
+  const base=response.url||original;
+  await validateFirstSegment(manifest,base);
+  const rewritten=await rewrite(manifest,base,u.origin,env,exp);
   const id=crypto.randomUUID();const manifestUrl=new URL('/api/jiexi/resolved/'+id+'.m3u8',u.origin).href;
   // Opaque, short-lived cache entry; eviction is reported explicitly to the player.
   await caches.default.put(new Request(manifestUrl),new Response(rewritten,{headers:{'Content-Type':'application/vnd.apple.mpegurl','Cache-Control':'public, max-age=7200'}}));
@@ -158,7 +160,7 @@ export async function handleParserResolver(request,env){const u=new URL(request.
   let r=await upstream(url,headers,true);
   if(!r.ok){await r.body?.cancel();throw fail('媒体服务器返回 HTTP '+r.status);}
   const type=r.headers.get('content-type')||'';
-  if(/\.m3u8(?:\?|$)/i.test(url)||/mpegurl/i.test(type)){const text=await bounded(r);const playlist=await rewrite(text,url,u.origin,{...env,blockAds:u.searchParams.get('ads')!=='0'},exp);return new Response(request.method==='HEAD'?null:playlist,{headers:{...mediaCors,'Content-Type':'application/vnd.apple.mpegurl','Cache-Control':'no-store'}});}
+  if(/\.m3u8(?:\?|$)/i.test(url)||/mpegurl/i.test(type)){const text=await bounded(r);const playlist=await rewrite(text,r.url||url,u.origin,{...env,blockAds:u.searchParams.get('ads')!=='0'},exp);return new Response(request.method==='HEAD'?null:playlist,{headers:{...mediaCors,'Content-Type':'application/vnd.apple.mpegurl','Cache-Control':'no-store'}});}
   r=await mediaRange(r,range);
   const out=new Headers({...mediaCors,'Content-Type':type.toLowerCase().includes('video/mp4')?'video/mp4':'application/octet-stream','Cache-Control':'private, max-age=120','X-Content-Type-Options':'nosniff'});
   for(const h of ['Content-Range','Content-Length','Accept-Ranges'])if(r.headers.has(h))out.set(h,r.headers.get(h));

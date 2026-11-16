@@ -56,6 +56,27 @@ test('probes the highest HLS rendition while preserving its master playlist', as
     assert.equal(result.quality.source, 'video'); assert.ok(result.latencyMs > 0);
   } finally { globalThis.fetch = original; }
 });
+
+test('probes relative media using the final playlist URL after a redirect', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async input => {
+    const url = new URL(input);
+    if (url.hostname === 'entry.demo.site') return new Response(null, { status: 302, headers: { Location: 'https://cdn.demo.site/program/episode/index.m3u8' } });
+    if (url.pathname.endsWith('.m3u8')) {
+      const response = new Response('#EXTM3U\n#EXTINF:6,\n0.ts\n#EXT-X-ENDLIST');
+      Object.defineProperty(response, 'url', { value: url.href });
+      return response;
+    }
+    assert.equal(url.href, 'https://cdn.demo.site/program/episode/0.ts');
+    return new Response(avc());
+  };
+  try {
+    const result = await probeCatalogMedia('https://entry.demo.site/index.m3u8');
+    assert.equal(result.url, 'https://entry.demo.site/index.m3u8');
+    assert.equal(result.durationSeconds, 6);
+    assert.equal(result.quality.height, 1080);
+  } finally { globalThis.fetch = original; }
+});
 test('returns all ranked routes and uses the quality-first winner as the API result', async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async input => {
