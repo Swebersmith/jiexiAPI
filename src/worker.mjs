@@ -3,7 +3,7 @@ import { handleAdmin } from './admin.mjs';
 import { loadConfig } from './config.mjs';
 import { identifyPage, episodeNumber } from './page-metadata.mjs';
 import { catalogIdentity, catalogLanguage, catalogQueries, matchingItems, episodeChoices, availableEpisodes } from './catalog-match.mjs';
-import { probeCatalogMedia, sortRoutes } from './media-probe.mjs';
+import { probeCatalogMedia, sortRoutes, durationOutliers } from './media-probe.mjs';
 import { resolveParserServices, qlParser } from './parser-services.mjs';
 import { episodeIdentity, episodeReference, lineEpisodeIdentities } from './episode-identity.mjs';
 import { filterSearchResults } from './ai-search.mjs';
@@ -247,13 +247,15 @@ async function resolveCatalog(metadata, source, data, request, env, anchor) {
     const status = stage === 'episode' ? undefined : /HTTP (\d{3})/.exec(failure?.message || '')?.[1];
     let reason = '片源检测失败';
     if (stage === 'episode') reason = failure?.code === 'EPISODE_AMBIGUOUS' ? '分集存在多个版本，暂无法确认' : '未匹配到对应分集';
-    else if (status) reason = (stage === 'detail' ? '采集接口' : '片源') + '返回 HTTP ' + status;
+    else if (status) reason = (stage === 'detail' ? '采集接口' : failure?.probeStage === 'playlist' ? '播放清单' : failure?.probeStage === 'segment' ? '视频分片' : '片源') + '返回 HTTP ' + status;
+    else if (failure?.code === 'MEDIA_DURATION_MISMATCH') reason = failure.message;
     else if (stage === 'detail') reason = '详情读取失败';
     else if (['TimeoutError', 'AbortError'].includes(failure?.name)) reason = '片源检测超时';
     unavailableRoutes.push({ id: [video.id, line?.id, episode?.id].filter(value => value !== undefined).join(':'),
       name: video.sourceName + (line ? ' · ' + line.name : ''), url: '', available: false,
       sourceId: video.sourceId, sourceName: video.sourceName, stage, reason,
-      ...(status ? { upstreamStatus: Number(status) } : {}) });
+      ...(status ? { upstreamStatus: Number(status) } : {}),
+      ...(failure?.durationSeconds ? { durationSeconds: failure.durationSeconds } : {}) });
   };
   let failure;
   for (const [index, result] of details.entries()) {
@@ -265,6 +267,7 @@ async function resolveCatalog(metadata, source, data, request, env, anchor) {
     throw Object.assign(error('该日期或期数有多个版本，请从选集列表选择完整期名', 409), { code: 'EPISODE_AMBIGUOUS' });
   }
   const probes = new Map();
+  const observations = [];
   const routes = [];
   for (let offset = 0; offset < choices.length; offset += 4) {
     const pending = choices.slice(offset, offset + 4);
@@ -273,7 +276,7 @@ async function resolveCatalog(metadata, source, data, request, env, anchor) {
       const probe = await probes.get(episode.url);
       const media = await signCatalogMedia(probe.url, env.PUBLIC_ORIGIN || request.url, env.MEDIA_SECRET);
       const id = video.id + ':' + line.id + ':' + episode.id;
-      return { id, ...media, quality: probe.quality, latencyMs: probe.latencyMs,
+      return { id, ...media, quality: probe.quality, latencyMs: probe.latencyMs, ...(probe.durationSeconds ? { durationSeconds: probe.durationSeconds } : {}),
         name: video.sourceName + ' · ' + line.name + ' · ' + probe.quality.label + ' · ' + probe.latencyMs + 'ms',
         type: probe.type,
         match: { id: video.id, title: video.title, year: video.year, sourceId: video.sourceId, sourceName: video.sourceName,
@@ -282,16 +285,30 @@ async function resolveCatalog(metadata, source, data, request, env, anchor) {
       };
     }));
     for (const [index, result] of batch.entries()) {
+      const { video, line, episode } = pending[index];
+      observations.push({ sourceId: video.sourceId, url: episode.url, durationSeconds: result.status === 'fulfilled' ? result.value.durationSeconds : result.reason.durationSeconds });
       if (result.status === 'fulfilled') routes.push(result.value);
       else {
         failure = result.reason;
-        const { video, line, episode } = pending[index];
         unavailable(video, 'media', failure, line, episode);
       }
     }
   }
+  const outliers = durationOutliers(observations);
+  for (let index = routes.length - 1; index >= 0; index--) {
+    const route = routes[index];
+    const mismatch = outliers.get(route.originalUrl);
+    if (!mismatch) continue;
+    failure = Object.assign(error('片源时长与其他源差异过大，需核对（' + Math.round(mismatch.durationSeconds) + ' 秒，其他源约 ' + Math.round(mismatch.expectedDurationSeconds) + ' 秒）', 502), { code: 'MEDIA_DURATION_MISMATCH', ...mismatch });
+    const choice = choices.find(value => value.video.id === route.match.id && value.line.id === route.match.line && value.episode.id === route.match.episode);
+    unavailable(choice.video, 'media', failure, choice.line, choice.episode);
+    routes.splice(index, 1);
+  }
   sortRoutes(routes);
-  if (!routes.length) throw Object.assign(failure || error('采集站未提供可用资源', 404), { unavailableRoutes });
+  if (!routes.length) {
+    if (!choices.length) throw Object.assign(failure || error('未匹配到对应分集', 404), { unavailableRoutes });
+    throw Object.assign(error('已找到影片条目，但当前分集没有通过播放检测的线路', 502), { code: failure?.code === 'MEDIA_DURATION_MISMATCH' ? failure.code : 'NO_PLAYABLE_ROUTE', unavailableRoutes });
+  }
   const episodes = availableEpisodes(details.filter(result => result.status === 'fulfilled').map(result => result.value));
   return { kind: 'playback', provider: 'cms', source, ...routes[0], metadata, routes, unavailableRoutes, episodes, selectedEpisodeNumber: routes[0].match.episodeNumber,
     selectedEpisodeKey: metadata.episodeKey || routes[0].match.episodeKey, selectedRouteId: routes[0].id };
@@ -335,7 +352,7 @@ export default {
     } catch (err) {
       const status = err.status || 502;
       console.warn(JSON.stringify({ event: 'api_error', path: url.pathname, status }));
-      response = json({ error: { code: err.code || (status === 400 ? 'INVALID_REQUEST' : 'RESOLVE_FAILED'), message: err.message },
+      response = json({ error: { code: typeof err.code === 'string' ? err.code : (status === 400 ? 'INVALID_REQUEST' : 'RESOLVE_FAILED'), message: err.message },
         ...(err.parserResults ? { parserResults: err.parserResults } : {}), ...(err.unavailableRoutes ? { unavailableRoutes: err.unavailableRoutes } : {}) }, status);
     }
     const headers = new Headers(response.headers);

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { videoDimensions } from '../src/video-dimensions.mjs';
-import { probeCatalogMedia, sortRoutes } from '../src/media-probe.mjs';
+import { probeCatalogMedia, sortRoutes, durationOutliers } from '../src/media-probe.mjs';
 import worker from '../src/worker.mjs';
 
 function bitWriter() {
@@ -109,13 +109,56 @@ test('includes a newly configured fourth source and reports its HTTP failures wi
     assert.equal(unavailable.unavailableRoutes[0].sourceId, 'ffzy');
     assert.equal(unavailable.unavailableRoutes[0].available, false);
     assert.equal(unavailable.unavailableRoutes[0].upstreamStatus, 403);
-    assert.equal(unavailable.unavailableRoutes[0].reason, '片源返回 HTTP 403');
+    assert.equal(unavailable.unavailableRoutes[0].reason, '播放清单返回 HTTP 403');
     assert.equal(unavailable.url, unavailable.routes[0].url);
     assert.equal(JSON.stringify(unavailable).includes('upstream-private-debug-text'), false);
     const failed = await worker.fetch(new Request('https://api.demo.site/api/player/resolve', { method: 'POST', body: JSON.stringify({ id: 'ffzy:1', episodeNumber: 1, source: 'ffzy' }) }), environment);
     const data = await failed.json();
     assert.equal(failed.status, 502);
     assert.equal(data.unavailableRoutes[0].sourceId, 'ffzy');
+  } finally { globalThis.fetch = original; }
+});
+
+test('requires an extreme duration difference or corroboration from independent sources', () => {
+  const observation = (sourceId, durationSeconds, url = sourceId) => ({ sourceId, durationSeconds, url });
+  const short = observation('short', 500);
+  const long = observation('long', 1488);
+  assert.equal(durationOutliers([short, long]).size, 0);
+  assert.equal(durationOutliers([short, long, observation('long', 1508, 'duplicate')]).size, 0);
+  assert.equal(durationOutliers([short, long, observation('other', 1508, 'long')]).size, 0);
+  assert.equal(durationOutliers([short, long, observation('other', 1900)]).size, 0);
+  assert.equal(durationOutliers([short, observation('one', 181), observation('two', 184)]).size, 0);
+  assert.equal(durationOutliers([short, long, observation('other', 1508)]).get('short').expectedDurationSeconds, 1498);
+  assert.equal(durationOutliers([observation('short', 180), long]).get('short').expectedDurationSeconds, 1488);
+  assert.equal(durationOutliers([observation('short', 180), observation('short', 1488)]).size, 0);
+});
+
+test('preserves measured duration when segments fail and rejects a short fallback for the same episode', async () => {
+  const original = globalThis.fetch;
+  let blocked = true;
+  globalThis.fetch = async input => {
+    const url = new URL(input), id = url.hostname.split('.')[0];
+    if (url.hostname.endsWith('.cms.demo.site')) return Response.json({ code: 1, list: [{ vod_id: 1, vod_name: '影片', vod_year: '2026', vod_play_from: 'hls', vod_play_url: '第1280集$https://' + id + '.cdn.demo.site/index.m3u8' }] });
+    if (blocked && id === 'two') return new Response('denied', { status: 403 });
+    if (url.pathname === '/index.m3u8') return new Response('#EXTM3U\n#EXTINF:' + (id === 'short' ? 180 : id === 'one' ? 1488 : 1508) + ',\n0.ts\n#EXT-X-ENDLIST');
+    if (blocked && id !== 'short') return new Response('denied', { status: 403 });
+    return new Response(avc());
+  };
+  const env = { MEDIA_SECRET: 'duration-validation-test-secret', CMS_SOURCES: JSON.stringify(['short', 'one', 'two'].map(id => ({ id, name: id, url: 'https://' + id + '.cms.demo.site/api' }))) };
+  const resolve = () => worker.fetch(new Request('https://api.demo.site/api/player/resolve', { method: 'POST', body: JSON.stringify({ episodeRef: { id: 'one:1', line: '0', episode: '0', title: '第1280集' } }) }), env);
+  try {
+    await assert.rejects(probeCatalogMedia('https://one.cdn.demo.site/index.m3u8'), err => err.durationSeconds === 1488 && err.probeStage === 'segment');
+    const response = await resolve(), failed = await response.json();
+    assert.equal(response.status, 502);
+    assert.equal(failed.error.code, 'MEDIA_DURATION_MISMATCH');
+    assert.equal(failed.url, undefined);
+    assert.match(failed.unavailableRoutes.find(route => route.sourceId === 'short').reason, /片源时长与其他源差异过大/);
+    assert.equal(failed.unavailableRoutes.find(route => route.sourceId === 'one').reason, '视频分片返回 HTTP 403');
+    blocked = false;
+    const recovered = await (await resolve()).json();
+    assert.equal(recovered.routes.length, 2);
+    assert.ok(recovered.routes.every(route => route.durationSeconds > 1400));
+    assert.equal(recovered.unavailableRoutes[0].sourceId, 'short');
   } finally { globalThis.fetch = original; }
 });
 
