@@ -210,7 +210,7 @@ function parserPlayback(source, catalog, resolved) {
   }
   const selected = routes[0];
   return { kind: 'playback', source, ...selected, provider: selected.provider || 'cms', metadata: catalog?.metadata || null,
-    routes, selectedRouteId: selected.id, episodes: catalog?.episodes || [],
+    routes, unavailableRoutes: catalog?.unavailableRoutes || [], selectedRouteId: selected.id, episodes: catalog?.episodes || [],
     selectedEpisodeNumber: catalog?.selectedEpisodeNumber ?? null, selectedEpisodeKey: catalog?.selectedEpisodeKey ?? null, parserResults: resolved.results };
 }
 
@@ -234,14 +234,32 @@ async function resolveCatalog(metadata, source, data, request, env, anchor) {
   const completed = results.filter(result => result.status === 'fulfilled');
   if (!completed.length && !anchor) throw results[0].reason;
   const items = new Map([...(anchor ? [anchor] : []), ...completed.flatMap(result => result.value.items)].map(item => [item.id, item]));
-  const candidates = matchingItems([...items.values()], metadata).slice(0, 8);
+  const matches = matchingItems([...items.values()], metadata);
+  const representatives = new Map();
+  for (const candidate of matches) if (!representatives.has(candidate.sourceId)) representatives.set(candidate.sourceId, candidate);
+  const preferred = [...representatives.values()];
+  const preferredIds = new Set(preferred.map(candidate => candidate.id));
+  const candidates = [...preferred, ...matches.filter(candidate => !preferredIds.has(candidate.id))].slice(0, 8);
   const details = await Promise.allSettled(candidates.map(candidate => candidate.id === anchor?.id ? anchor : detail(candidate.id, env)));
   const choices = [];
+  const unavailableRoutes = [];
+  const unavailable = (video, stage, failure, line, episode) => {
+    const status = stage === 'episode' ? undefined : /HTTP (\d{3})/.exec(failure?.message || '')?.[1];
+    let reason = '片源检测失败';
+    if (stage === 'episode') reason = failure?.code === 'EPISODE_AMBIGUOUS' ? '分集存在多个版本，暂无法确认' : '未匹配到对应分集';
+    else if (status) reason = (stage === 'detail' ? '采集接口' : '片源') + '返回 HTTP ' + status;
+    else if (stage === 'detail') reason = '详情读取失败';
+    else if (['TimeoutError', 'AbortError'].includes(failure?.name)) reason = '片源检测超时';
+    unavailableRoutes.push({ id: [video.id, line?.id, episode?.id].filter(value => value !== undefined).join(':'),
+      name: video.sourceName + (line ? ' · ' + line.name : ''), url: '', available: false,
+      sourceId: video.sourceId, sourceName: video.sourceName, stage, reason,
+      ...(status ? { upstreamStatus: Number(status) } : {}) });
+  };
   let failure;
-  for (const result of details) {
-    if (result.status === 'rejected') { failure = result.reason; continue; }
+  for (const [index, result] of details.entries()) {
+    if (result.status === 'rejected') { failure = result.reason; unavailable(candidates[index], 'detail', failure); continue; }
     try { choices.push(...episodeChoices(result.value, metadata).map(selected => ({ video: result.value, ...selected }))); }
-    catch (err) { failure = err; }
+    catch (err) { failure = err; unavailable(result.value, 'episode', err); }
   }
   if (!metadata.episodeKey && (failure?.code === 'EPISODE_AMBIGUOUS' || new Set(choices.map(choice => choice.key)).size > 1)) {
     throw Object.assign(error('该日期或期数有多个版本，请从选集列表选择完整期名', 409), { code: 'EPISODE_AMBIGUOUS' });
@@ -249,7 +267,8 @@ async function resolveCatalog(metadata, source, data, request, env, anchor) {
   const probes = new Map();
   const routes = [];
   for (let offset = 0; offset < choices.length; offset += 4) {
-    const batch = await Promise.allSettled(choices.slice(offset, offset + 4).map(async ({ video, line, episode, number, key }) => {
+    const pending = choices.slice(offset, offset + 4);
+    const batch = await Promise.allSettled(pending.map(async ({ video, line, episode, number, key }) => {
       if (!probes.has(episode.url)) probes.set(episode.url, probeCatalogMedia(episode.url));
       const probe = await probes.get(episode.url);
       const media = await signCatalogMedia(probe.url, env.PUBLIC_ORIGIN || request.url, env.MEDIA_SECRET);
@@ -262,15 +281,19 @@ async function resolveCatalog(metadata, source, data, request, env, anchor) {
           episodeKey: key || episodeIdentity(episode.title).key },
       };
     }));
-    for (const result of batch) {
+    for (const [index, result] of batch.entries()) {
       if (result.status === 'fulfilled') routes.push(result.value);
-      else failure = result.reason;
+      else {
+        failure = result.reason;
+        const { video, line, episode } = pending[index];
+        unavailable(video, 'media', failure, line, episode);
+      }
     }
   }
   sortRoutes(routes);
-  if (!routes.length) throw failure || error('采集站未提供可用资源', 404);
+  if (!routes.length) throw Object.assign(failure || error('采集站未提供可用资源', 404), { unavailableRoutes });
   const episodes = availableEpisodes(details.filter(result => result.status === 'fulfilled').map(result => result.value));
-  return { kind: 'playback', provider: 'cms', source, ...routes[0], metadata, routes, episodes, selectedEpisodeNumber: routes[0].match.episodeNumber,
+  return { kind: 'playback', provider: 'cms', source, ...routes[0], metadata, routes, unavailableRoutes, episodes, selectedEpisodeNumber: routes[0].match.episodeNumber,
     selectedEpisodeKey: metadata.episodeKey || routes[0].match.episodeKey, selectedRouteId: routes[0].id };
 }
 
@@ -312,7 +335,8 @@ export default {
     } catch (err) {
       const status = err.status || 502;
       console.warn(JSON.stringify({ event: 'api_error', path: url.pathname, status }));
-      response = json({ error: { code: err.code || (status === 400 ? 'INVALID_REQUEST' : 'RESOLVE_FAILED'), message: err.message }, ...(err.parserResults ? { parserResults: err.parserResults } : {}) }, status);
+      response = json({ error: { code: err.code || (status === 400 ? 'INVALID_REQUEST' : 'RESOLVE_FAILED'), message: err.message },
+        ...(err.parserResults ? { parserResults: err.parserResults } : {}), ...(err.unavailableRoutes ? { unavailableRoutes: err.unavailableRoutes } : {}) }, status);
     }
     const headers = new Headers(response.headers);
     headers.set('Vary', 'Origin');

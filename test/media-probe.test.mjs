@@ -81,3 +81,63 @@ test('returns all ranked routes and uses the quality-first winner as the API res
     assert.equal(data.quality.width, 1920); assert.equal(data.quality.height, 1080);
   } finally { globalThis.fetch = original; }
 });
+
+test('includes a newly configured fourth source and reports its HTTP failures without silently dropping it', async () => {
+  const original = globalThis.fetch;
+  const ids = ['ruyi', 'bfzy', 'czzy', 'ffzy'];
+  let blocked = false;
+  globalThis.fetch = async input => {
+    const url = new URL(input);
+    const id = url.hostname.split('.')[0];
+    if (url.hostname.endsWith('.cms.demo.site')) return Response.json({ code: 1, list: [{ vod_id: 1, vod_name: '影片', vod_year: '2026', type_name: '国产剧', vod_play_from: 'hls', vod_play_url: '第01集$https://' + id + '.cdn.demo.site/master.m3u8' }] });
+    if (blocked && id === 'ffzy') return new Response('upstream-private-debug-text', { status: 403 });
+    if (url.pathname === '/master.m3u8') return new Response('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1920x1080\nmedia.m3u8');
+    if (url.pathname === '/media.m3u8') return new Response('#EXTM3U\n#EXTINF:6,\n0.m4s');
+    return new Response(new Uint8Array([1, 2, 3, 4]));
+  };
+  const environment = { MEDIA_SECRET: 'new-source-test-secret-long', CMS_SOURCES: JSON.stringify(ids.map(id => ({ id, name: id, url: 'https://' + id + '.cms.demo.site/api' }))) };
+  const resolve = env => worker.fetch(new Request('https://api.demo.site/api/player/resolve', { method: 'POST', body: JSON.stringify({ episodeRef: { id: 'ruyi:1', line: '0', episode: '0', title: '第01集' } }) }), env);
+  try {
+    const available = await (await resolve(environment)).json();
+    assert.equal(available.routes.length, 4);
+    assert.ok(available.routes.some(route => route.match.sourceId === 'ffzy'));
+    assert.deepEqual(available.unavailableRoutes, []);
+    blocked = true;
+    const unavailable = await (await resolve(environment)).json();
+    assert.equal(unavailable.routes.length, 3);
+    assert.equal(unavailable.unavailableRoutes.length, 1);
+    assert.equal(unavailable.unavailableRoutes[0].sourceId, 'ffzy');
+    assert.equal(unavailable.unavailableRoutes[0].available, false);
+    assert.equal(unavailable.unavailableRoutes[0].upstreamStatus, 403);
+    assert.equal(unavailable.unavailableRoutes[0].reason, '片源返回 HTTP 403');
+    assert.equal(unavailable.url, unavailable.routes[0].url);
+    assert.equal(JSON.stringify(unavailable).includes('upstream-private-debug-text'), false);
+    const failed = await worker.fetch(new Request('https://api.demo.site/api/player/resolve', { method: 'POST', body: JSON.stringify({ id: 'ffzy:1', episodeNumber: 1, source: 'ffzy' }) }), environment);
+    const data = await failed.json();
+    assert.equal(failed.status, 502);
+    assert.equal(data.unavailableRoutes[0].sourceId, 'ffzy');
+  } finally { globalThis.fetch = original; }
+});
+
+test('gives each matching source a candidate slot before filling the detail budget with duplicate titles', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async input => {
+    const url = new URL(input), id = url.hostname.split('.')[0];
+    if (url.hostname.endsWith('.cms.demo.site')) {
+      const selected = url.searchParams.get('ids');
+      const entries = selected ? [Number(selected)] : id === 'many' ? [1, 2, 3, 4, 5, 6, 7, 8] : [1];
+      return Response.json({ code: 1, list: entries.map(vod_id => ({ vod_id, vod_name: '影片', vod_year: '2026', type_name: '国产剧', vod_play_from: 'hls', vod_play_url: '第1集$https://' + id + '.cdn.demo.site/' + vod_id + '/master.m3u8' })) });
+    }
+    if (url.pathname.endsWith('master.m3u8')) return new Response('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1920x1080\nmedia.m3u8');
+    if (url.pathname.endsWith('media.m3u8')) return new Response('#EXTM3U\n#EXTINF:6,\n0.m4s');
+    return new Response(new Uint8Array([1, 2, 3, 4]));
+  };
+  try {
+    const env = { MEDIA_SECRET: 'source-fairness-test-secret', CMS_SOURCES: JSON.stringify(['many', 'ffzy'].map(id => ({ id, name: id, url: 'https://' + id + '.cms.demo.site/api' }))) };
+    const response = await worker.fetch(new Request('https://api.demo.site/api/player/resolve', { method: 'POST', body: JSON.stringify({ id: 'many:1', episodeNumber: 1 }) }), env);
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(data.routes.length, 8);
+    assert.ok(data.routes.some(route => route.match.sourceId === 'ffzy'));
+  } finally { globalThis.fetch = original; }
+});
