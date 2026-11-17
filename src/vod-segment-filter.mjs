@@ -150,7 +150,13 @@ const onFrameGrid = (duration, rate) => Math.abs(duration - Math.round(duration 
 function isRuyiInsertion(groups, index, total, baseUrl) {
   const group = groups[index];
   const values = group.segments.map((segment) => segment.duration);
-  if (index === 0 || index === groups.length - 1 || group.segments[0].start < 120 || total - group.segments[0].start - group.duration < 60 || !(values.length === 5 && values[4] === 3 || values.length === 6 && values[5] === 1) || !values.slice(0, -1).every((value) => value === 4)) return false;
+  if (index === 0 || index === groups.length - 1 || group.segments[0].start < 120) return false;
+  const remaining = total - group.segments[0].start - group.duration;
+  if (remaining < 15) return false;
+  const legacyPackage = values.length === 5 && values[4] === 3 || values.length === 6 && values[5] === 1;
+  const currentPackage = values.length === 5 && values[4] >= 3.5 && values[4] < 4;
+  if (legacyPackage && remaining < 60) return false;
+  if (!legacyPackage && !currentPackage || !values.slice(0, -1).every((value) => value === 4)) return false;
   try {
     const url = mediaIdentity(baseUrl, baseUrl);
     if (!/^(?:cdn\d*|svip)\.ryi?play\d+\.com$/i.test(url.hostname) || !/^\/\d{8}\/[^/]+\/2000k\/hls\/index\.m3u8$/.test(url.pathname))
@@ -162,8 +168,17 @@ function isRuyiInsertion(groups, index, total, baseUrl) {
   } catch {
     return false;
   }
-  return [groups[index - 1], groups[index + 1]].every(
-    (neighbor) => neighbor.directory === group.directory && neighbor.segments.length >= 5 && neighbor.segments.filter((segment) => segment.duration !== 4).length >= 2
+  const neighbors = [groups[index - 1], groups[index + 1]];
+  if (!neighbors.every(
+    (neighbor) => neighbor.directory === group.directory && neighbor.segments.length >= 4
+  )) return false;
+  if (legacyPackage) {
+    return neighbors.every(
+      (neighbor) => neighbor.segments.filter((segment) => segment.duration !== 4).length >= 2
+    );
+  }
+  return neighbors.some((neighbor) => neighbor.segments.length !== values.length) || neighbors.every(
+    (neighbor) => neighbor.segments.every((segment) => segment.duration === 4)
   );
 }
 function detectGroups(groups, total, baseUrl) {

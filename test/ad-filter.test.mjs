@@ -20,6 +20,7 @@ const ruyiBase = 'https://cdn.ryplay12.com/20251006/22917_c962e8c4/2000k/hls/ind
 for (const [name, url, ranges] of [
   ['bear-season1.m3u8', ruyiBase, [[480.36, 499.36]]],
   ['bear-season2.m3u8', 'https://cdn.ryplay12.com/20261001/42140_c77b26e4/2000k/hls/index.m3u8', [[529.28, 550.28]]],
+  ['bear-season2-current.m3u8', 'https://cdn.ryplay12.com/20261001/42140_c77b26e4/2000k/hls/index.m3u8', [[663.04, 682.92]]],
   ['movie.m3u8', 'https://svip.ryiplay18.com/20260531/6798_92c24498/2000k/hls/index.m3u8', [[582.4, 601.4], [3380.36, 3401.36]]],
 ]) {
   test('uses the original player Ruyi rules before signing ' + name, async () => {
