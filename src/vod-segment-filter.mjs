@@ -168,17 +168,9 @@ function isRuyiInsertion(groups, index, total, baseUrl) {
   } catch {
     return false;
   }
-  const neighbors = [groups[index - 1], groups[index + 1]];
-  if (!neighbors.every(
-    (neighbor) => neighbor.directory === group.directory && neighbor.segments.length >= 4
-  )) return false;
-  if (legacyPackage) {
-    return neighbors.every(
-      (neighbor) => neighbor.segments.filter((segment) => segment.duration !== 4).length >= 2
-    );
-  }
-  return neighbors.some((neighbor) => neighbor.segments.length !== values.length) || neighbors.every(
-    (neighbor) => neighbor.segments.every((segment) => segment.duration === 4)
+  if (!legacyPackage) return true;
+  return [groups[index - 1], groups[index + 1]].every(
+    (neighbor) => neighbor.directory === group.directory && neighbor.segments.length >= 5 && neighbor.segments.filter((segment) => segment.duration !== 4).length >= 2
   );
 }
 function detectGroups(groups, total, baseUrl) {

@@ -21,6 +21,7 @@ for (const [name, url, ranges] of [
   ['bear-season1.m3u8', ruyiBase, [[480.36, 499.36]]],
   ['bear-season2.m3u8', 'https://cdn.ryplay12.com/20261001/42140_c77b26e4/2000k/hls/index.m3u8', [[529.28, 550.28]]],
   ['bear-season2-current.m3u8', 'https://cdn.ryplay12.com/20261001/42140_c77b26e4/2000k/hls/index.m3u8', [[663.04, 682.92]]],
+  ['zouma-ren-ep35.m3u8', 'https://svip.ryiplay18.com/20261117/16421_67b92b35/2000k/hls/index.m3u8', [[661.0, 680.88]]],
   ['movie.m3u8', 'https://svip.ryiplay18.com/20260531/6798_92c24498/2000k/hls/index.m3u8', [[582.4, 601.4], [3380.36, 3401.36]]],
 ]) {
   test('uses the original player Ruyi rules before signing ' + name, async () => {
@@ -44,9 +45,13 @@ for (const [name, url, ranges] of [
   });
 }
 
-test('retains the original player Ruyi clean-movie and unrelated-host safeguards', async () => {
+test('removes the repeated Ruyi movie package and keeps unrelated-host safeguards', async () => {
   const clean = fixture('ruyi', 'clean-movie.m3u8');
-  assert.equal(filterVodAdSegments(clean, 'https://cdn7.ryplay7.com/20250501/13887_828cf261/2000k/hls/index.m3u8').playlist, clean);
+  const result = filterVodAdSegments(clean, 'https://cdn7.ryplay7.com/20250501/13887_828cf261/2000k/hls/index.m3u8');
+  assert.equal(result.reason, 'filtered');
+  assert.deepEqual(result.removed.map(range => [Math.round(range.start * 100) / 100, Math.round(range.end * 100) / 100]), [[640.56, 660.44], [2861.16, 2881.04]]);
+  const segmentCount = value => value.split('\n').filter(line => line.trim() && !line.startsWith('#')).length;
+  assert.equal(segmentCount(result.playlist), segmentCount(clean) - 10);
   for (const url of ['https://unrelated.demo.site/20251006/22917_c962e8c4/2000k/hls/index.m3u8', 'https://cdn.ryplay12.com.evil.demo.site/20251006/22917_c962e8c4/2000k/hls/index.m3u8', 'https://cdn.ryplay12.com/ordinary/index.m3u8']) {
     assert.equal(filterVodAdSegments(fixture('ruyi', 'bear-season1.m3u8'), url).removed.length, 0);
   }
